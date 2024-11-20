@@ -1,0 +1,9 @@
+[package]
+name = "new-shimeji"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+softbuffer = "0.4.6"
+tiny-skia = "0.11.4"
+winit = "0.30.5"
