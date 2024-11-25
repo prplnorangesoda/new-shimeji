@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.93"
+deadpool = "0.12.1"
 native-dialog = "0.7.0"
 softbuffer = "0.4.6"
 tao = "0.30.8"
+tokio = {version = "1.41.1", features = ["full"]}
