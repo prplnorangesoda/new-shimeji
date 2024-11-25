@@ -2,6 +2,7 @@
 use anyhow::Context as _;
 use std::{num::NonZeroU32, rc::Rc};
 use tao::{
+    dpi::{LogicalSize, Size},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
@@ -9,10 +10,10 @@ use tao::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RGBA {
-    red: u8,
-    green: u8,
-    blue: u8,
-    alpha: u8,
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
 }
 
 impl RGBA {
@@ -69,17 +70,18 @@ impl RGBA {
 
         (self.alpha as u32) << 24
             | (self.red as u32) << 16
-            | (self.blue as u32) << 8
-            | self.green as u32
+            | (self.green as u32) << 8
+            | self.blue as u32
     }
 }
 fn main() -> anyhow::Result<()> {
     let event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
-        .with_decorations(false)
+        .with_decorations(true)
         .with_transparent(true)
         .with_always_on_top(true)
+        .with_min_inner_size(LogicalSize::new(100, 100))
         .build(&event_loop)
         .context("Building initial window failed")?;
 
@@ -89,7 +91,12 @@ fn main() -> anyhow::Result<()> {
         let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
         (window, context, surface)
     };
+
+    println!("Current Monitor: {:?}", window.current_monitor());
     window.set_title("Awesome window!");
+    window
+        .set_ignore_cursor_events(true)
+        .expect("Should be possible to ignore cursor events");
     // if cfg!(target_os = "linux") {
     //     native_dialog::MessageDialog::new()
     //         .set_title("info")
@@ -132,7 +139,7 @@ fn main() -> anyhow::Result<()> {
                     "First four buffer bytes: {:b} {:b} {:b} {:b}",
                     buffer[0], buffer[1], buffer[2], buffer[3]
                 );
-                let color_u32 = RGBA::new(0, 0, 0, 128).to_softbuf_u32();
+                let color_u32 = RGBA::new(0, 0, 0, 100).to_softbuf_u32();
                 buffer.fill(color_u32);
                 buffer.present().unwrap();
             }
