@@ -1,13 +1,16 @@
 #![deny(unused_must_use)]
 #![allow(dead_code)]
+#![allow(unused_imports)]
 use anyhow::Context as _;
 use deadpool::unmanaged::Pool;
 use std::{
     num::NonZeroU32,
     process::exit,
     rc::Rc,
-    sync::Arc,
-    sync::{atomic::AtomicBool, mpsc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::Duration,
 };
@@ -22,42 +25,96 @@ mod rgba;
 mod shimeji;
 
 use rgba::RGBA;
-use shimeji::ShimejiBucket;
+use shimeji::{BucketError, ShimejiBucket};
+
+use derive_more::{derive::From, Display, Error};
 
 #[derive(Debug)]
 enum Status {
     Ok,
     Exiting,
 }
+#[derive(Display, Debug, Error, From)]
+enum ManagerError {
+    /// Should never happen.
+    NoBucketsAvailable,
+    BucketError(BucketError),
+}
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    println!("Going");
-
-    let should_exit = Arc::new(AtomicBool::new(false));
-
-    let copy = should_exit.clone();
-
-    let parallelism = std::thread::available_parallelism()?.get();
-
-    let mut shimeji_vec = vec![];
-    for i in 1..=parallelism {
-        shimeji_vec.push(ShimejiBucket::new())
-    }
-
-    println!("Available parallelism: {}", parallelism);
-    let running_thread = thread::spawn(move || {
-        while !copy.load(std::sync::atomic::Ordering::Relaxed) {
-            println!("HI I AM THE MULTI THREAD");
-
-            thread::sleep(Duration::from_millis(500));
+#[derive(Debug)]
+struct BucketManager<'a> {
+    buckets: Vec<ShimejiBucket<'a>>,
+    should_exit: Arc<AtomicBool>,
+}
+impl BucketManager<'_> {
+    pub fn new(amount: usize) -> Self {
+        assert!(amount != 0);
+        let mut buckets = Vec::with_capacity(amount);
+        let should_exit = Arc::new(AtomicBool::new(false));
+        for i in 0..amount {
+            buckets.push(ShimejiBucket::new(i, should_exit.clone()))
         }
-    });
+        Self {
+            should_exit,
+            buckets,
+        }
+    }
+    pub fn add_shimeji<'a>(&mut self, _conf: &'a ShimejiConfig) -> Result<(), ManagerError> {
+        let bucket = self
+            .buckets
+            .iter_mut()
+            .reduce(|acc, bucket| {
+                if bucket.len() > acc.len() {
+                    bucket
+                } else {
+                    acc
+                }
+            })
+            .ok_or(ManagerError::NoBucketsAvailable)?;
 
-    thread::sleep(Duration::from_secs(5));
+        bucket.add();
+        Ok(())
+    }
+    pub fn run(mut self) -> Result<(), ManagerError> {
+        for bucket in self.buckets.iter_mut() {
+            bucket.init()?
+        }
+        loop {
+            thread::sleep(Duration::from_secs(5));
+            self.should_exit.store(true, Ordering::Release);
+            for bucket in self.buckets.into_iter() {
+                bucket.join_thread()?
+            }
+            break Ok(());
+        }
+    }
+}
 
-    should_exit.store(true, std::sync::atomic::Ordering::SeqCst);
-    running_thread.join().ok();
+#[derive(Debug)]
+pub struct ShimejiConfig {
+    name: String,
+}
+fn main() -> anyhow::Result<()> {
+    simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
+        .env()
+        .init()
+        .expect("Should be able to set up logger");
+    log::info!("Going");
+
+    let parallelism = std::thread::available_parallelism()
+        .context("Failed to get available parallelism for this system")?
+        .get();
+    log::info!("Available parallelism: {}", parallelism);
+
+    let mut manager = BucketManager::new(parallelism);
+
+    let example_config = ShimejiConfig {
+        name: String::from("Name"),
+    };
+    manager.add_shimeji(&example_config)?;
+
+    manager.run()?;
     Ok(())
     // let event_loop = EventLoop::new();
     // let window = WindowBuilder::new()
@@ -130,4 +187,11 @@ async fn main() -> anyhow::Result<()> {
     //         _ => (),
     //     }
     // });
+}
+
+mod test {
+    #[test]
+    fn shimejis_are_added_correctly() -> anyhow::Result<()> {
+        Ok(())
+    }
 }
