@@ -40,10 +40,10 @@ impl ShimejiBucket<'_> {
     }
     pub fn init(&mut self) -> Result<(), BucketError> {
         let should_exit = self.should_exit.clone();
-        let id = self.id.clone();
+        let id = self.id;
         self.thread = Some(
             thread::Builder::new()
-                .name(format!("Bucket thread {}", self.id))
+                .name(format!("Bucket thread {}", &id))
                 .spawn(move || loop {
                     if should_exit.load(Ordering::Relaxed) {
                         break;
@@ -55,13 +55,15 @@ impl ShimejiBucket<'_> {
         Ok(())
     }
     pub fn join_thread(self) -> Result<(), BucketError> {
-        if let None = self.thread {
+        if self.thread.is_none() {
             return Ok(());
         }
         self.thread.unwrap().join().unwrap();
         Ok(())
     }
-    pub fn add(&mut self) {}
+    pub fn add(&mut self) {
+        todo!()
+    }
     pub fn len(&self) -> usize {
         self.currently_responsible_shimejis.len()
     }

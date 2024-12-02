@@ -1,16 +1,14 @@
-
-
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct RGBA {
+pub struct Rgba {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
     pub alpha: u8,
 }
 
-impl RGBA {
+impl Rgba {
     pub fn new(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
-        RGBA {
+        Self {
             red,
             green,
             blue,
@@ -23,7 +21,7 @@ impl RGBA {
         T: Into<(u8, u8, u8, u8)>,
     {
         let rgba = tuple.into();
-        RGBA {
+        Self {
             red: rgba.0,
             green: rgba.1,
             blue: rgba.2,
@@ -41,7 +39,7 @@ impl RGBA {
     /// R: Red channel
     /// G: Green channel
     /// B: Blue channel
-    pub fn to_softbuf_u32(&self) -> u32 {
+    pub fn to_softbuf_u32(self) -> u32 {
         if self.alpha == 0 {
             return 0;
         }

@@ -24,7 +24,7 @@ use tao::{
 mod rgba;
 mod shimeji;
 
-use rgba::RGBA;
+use rgba::Rgba;
 use shimeji::{BucketError, ShimejiBucket};
 
 use derive_more::{derive::From, Display, Error};
@@ -47,6 +47,9 @@ struct BucketManager<'a> {
     should_exit: Arc<AtomicBool>,
 }
 impl BucketManager<'_> {
+    ///
+    /// # Panics
+    /// Panics if `amount == 0`.
     pub fn new(amount: usize) -> Self {
         assert!(amount != 0);
         let mut buckets = Vec::with_capacity(amount);
@@ -59,7 +62,7 @@ impl BucketManager<'_> {
             buckets,
         }
     }
-    pub fn add_shimeji<'a>(&mut self, _conf: &'a ShimejiConfig) -> Result<(), ManagerError> {
+    pub fn add_shimeji(&mut self, _conf: &ShimejiConfig) -> Result<(), ManagerError> {
         let bucket = self
             .buckets
             .iter_mut()
@@ -79,14 +82,14 @@ impl BucketManager<'_> {
         for bucket in self.buckets.iter_mut() {
             bucket.init()?
         }
-        loop {
+        for _i in 1..=5 {
             thread::sleep(Duration::from_secs(5));
-            self.should_exit.store(true, Ordering::Release);
-            for bucket in self.buckets.into_iter() {
-                bucket.join_thread()?
-            }
-            break Ok(());
         }
+        self.should_exit.store(true, Ordering::Release);
+        for bucket in self.buckets.into_iter() {
+            bucket.join_thread()?
+        }
+        Ok(())
     }
 }
 
