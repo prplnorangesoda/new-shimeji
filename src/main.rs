@@ -2,8 +2,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 use anyhow::Context as _;
-use deadpool::unmanaged::Pool;
 use std::{
+    fs::File,
     num::NonZeroU32,
     process::exit,
     rc::Rc,
@@ -25,7 +25,7 @@ mod rgba;
 mod shimeji;
 
 use rgba::Rgba;
-use shimeji::{BucketError, ShimejiBucket};
+use shimeji::{BucketError, Shimeji, ShimejiBucket};
 
 use derive_more::{derive::From, Display, Error};
 
@@ -42,11 +42,11 @@ enum ManagerError {
 }
 
 #[derive(Debug)]
-struct BucketManager<'a> {
-    buckets: Vec<ShimejiBucket<'a>>,
+struct BucketManager {
+    buckets: Vec<ShimejiBucket>,
     should_exit: Arc<AtomicBool>,
 }
-impl BucketManager<'_> {
+impl BucketManager {
     ///
     /// # Panics
     /// Panics if `amount == 0`.
@@ -55,14 +55,16 @@ impl BucketManager<'_> {
         let mut buckets = Vec::with_capacity(amount);
         let should_exit = Arc::new(AtomicBool::new(false));
         for i in 0..amount {
-            buckets.push(ShimejiBucket::new(i, should_exit.clone()))
+            let mut bucket = ShimejiBucket::new(i, should_exit.clone());
+            bucket.init().expect("should be able to init bucket");
+            buckets.push(bucket);
         }
         Self {
             should_exit,
             buckets,
         }
     }
-    pub fn add_shimeji(&mut self, _conf: &ShimejiConfig) -> Result<(), ManagerError> {
+    pub fn add_shimeji(&mut self, conf: &ShimejiConfig) -> Result<(), ManagerError> {
         let bucket = self
             .buckets
             .iter_mut()
@@ -75,21 +77,24 @@ impl BucketManager<'_> {
             })
             .ok_or(ManagerError::NoBucketsAvailable)?;
 
-        bucket.add();
+        log::info!("Adding a new shimeji to bucket id: {}", bucket.id);
+
+        let shimeji = Shimeji::with_config(conf);
+        bucket.add(shimeji)?;
         Ok(())
     }
-    pub fn run(mut self) -> Result<(), ManagerError> {
-        for bucket in self.buckets.iter_mut() {
-            bucket.init()?
+    pub fn run(mut self, mut tray_handle: tray_item::TrayItem) -> Result<(), ManagerError> {
+        let example_config = ShimejiConfig {
+            name: String::from("Name"),
+        };
+        self.add_shimeji(&example_config)?;
+        tray_handle.add_label("label").unwrap();
+
+        loop {
+            log::trace!("Yielding main thread");
+            thread::sleep(Duration::from_secs(0));
+            thread::yield_now();
         }
-        for _i in 1..=5 {
-            thread::sleep(Duration::from_secs(5));
-        }
-        self.should_exit.store(true, Ordering::Release);
-        for bucket in self.buckets.into_iter() {
-            bucket.join_thread()?
-        }
-        Ok(())
     }
 }
 
@@ -99,25 +104,35 @@ pub struct ShimejiConfig {
 }
 fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
+        .with_level(log::LevelFilter::Debug)
         .env()
         .init()
         .expect("Should be able to set up logger");
     log::info!("Going");
 
-    let parallelism = std::thread::available_parallelism()
+    let parallelism = thread::available_parallelism()
         .context("Failed to get available parallelism for this system")?
         .get();
     log::info!("Available parallelism: {}", parallelism);
 
-    let mut manager = BucketManager::new(parallelism);
+    let manager = BucketManager::new(parallelism);
 
-    let example_config = ShimejiConfig {
-        name: String::from("Name"),
+    let path = std::env!("HOME").to_owned() + "/tray_icon-red.png";
+
+    dbg!(&path);
+    let decoder_red = png::Decoder::new(File::open(&path).unwrap());
+    let (info_red, mut reader_red) = decoder_red.read_info().unwrap();
+    let mut buf_red = vec![0; info_red.buffer_size()];
+    reader_red.next_frame(&mut buf_red).unwrap();
+
+    let icon_red = tray_item::IconSource::Data {
+        data: buf_red,
+        height: 32,
+        width: 32,
     };
-    manager.add_shimeji(&example_config)?;
 
-    manager.run()?;
+    let tray_handle = tray_item::TrayItem::new("Example", icon_red).unwrap();
+    manager.run(tray_handle)?;
     Ok(())
     // let event_loop = EventLoop::new();
     // let window = WindowBuilder::new()

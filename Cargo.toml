@@ -5,10 +5,11 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.93"
-deadpool = "0.12.1"
 derive_more = {version = "1.0.0", features = ["from", "try_from", "error", "display"]}
 log = "0.4.22"
 native-dialog = "0.7.0"
+png = "0.16"
 simple_logger = "5.0.0"
 softbuffer = "0.4.6"
 tao = "0.30.8"
+tray-item = {version = "0.10.0", features = ["ksni"]}
