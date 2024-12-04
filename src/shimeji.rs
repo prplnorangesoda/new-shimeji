@@ -1,16 +1,20 @@
+use derive_more::derive::{Display, Error, From};
 use std::{
-    any::Any,
+    cell::{Cell, RefCell},
+    ops::Deref,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Sender},
+        mpsc::{self, Receiver, Sender},
         Arc,
     },
-    thread::{self, JoinHandle, Thread},
-    time::Duration,
+    thread::{self, JoinHandle},
+    time::{Duration, Instant, SystemTime},
 };
-
-use anyhow::Context;
-use derive_more::derive::{Display, Error, From};
+use winit::{
+    application::ApplicationHandler,
+    platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
+};
+use winit::{event_loop::EventLoop, platform::x11::EventLoopBuilderExtX11, window::Window};
 
 #[derive(Debug, Error, Display, From)]
 pub enum BucketError {
@@ -31,13 +35,13 @@ pub struct ShimejiBucket {
     is_running: bool,
     thread: Option<JoinHandle<()>>,
     should_exit: Arc<AtomicBool>,
-    currently_responsible_shimejis: Vec<Shimeji>,
+    currently_responsible_shimejis: usize,
     sender: Option<Sender<BucketThreadMessage>>,
 }
 
 pub enum BucketThreadMessage {
-    Add(Shimeji),
-    Remove(Shimeji),
+    Add(ShimejiData),
+    Remove(ShimejiData),
 }
 
 use BucketThreadMessage::*;
@@ -51,14 +55,94 @@ impl Drop for ShimejiBucket {
     }
 }
 
+struct ShimejiWindow {
+    window: Option<Window>,
+    event_loop: EventLoop<()>,
+    data: ShimejiData,
+    last_rendered_frame: Cell<Instant>,
+}
+
+impl ApplicationHandler for ShimejiWindow {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        unimplemented!()
+    }
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        unimplemented!()
+    }
+}
+impl ShimejiWindow {
+    pub fn new(data: ShimejiData) -> Self {
+        let event_loop = EventLoop::builder().with_x11().build().unwrap();
+        Self {
+            event_loop,
+            window: None,
+            last_rendered_frame: Cell::new(Instant::now()),
+            data,
+        }
+    }
+    pub fn update(&mut self) {
+        // self.event_loop.pump_app_events(Some(Duration::ZERO), self);
+        unimplemented!()
+    }
+}
+
+#[inline]
+fn loop_for_shimeji_execution(
+    receiver: Receiver<BucketThreadMessage>,
+    should_exit: Arc<AtomicBool>,
+) {
+    while !should_exit.load(Ordering::Relaxed) {
+        let mut inner_vec = vec![];
+        match receiver.recv().expect(
+            "should be able to receive value, else sender hung up without sending single shimeji",
+        ) {
+            Add(val) => {
+                log::debug!("Received shimeji: {val:?}");
+            }
+            _ => unimplemented!(),
+        };
+        'has_shimeji: loop {
+            if should_exit.load(Ordering::Relaxed) {
+                break;
+            }
+            // add a new shimeji, if we're waiting to receive one
+            let val = match receiver.try_recv() {
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(_) => break,
+                Ok(val) => Some(val),
+            };
+
+            if val.is_some() {
+                match val.unwrap() {
+                    Add(new_shimeji) => inner_vec.push(ShimejiWindow::new(new_shimeji)),
+                    Remove(_) => todo!(),
+                }
+            }
+            if inner_vec.is_empty() {
+                break 'has_shimeji;
+            }
+            for shimeji in inner_vec.iter_mut() {
+                shimeji.update();
+            }
+        }
+    }
+}
 impl ShimejiBucket {
+    pub fn is_running(&self) -> bool {
+        self.is_running
+    }
     pub fn new(id: usize, should_exit: Arc<AtomicBool>) -> Self {
         ShimejiBucket {
             id,
             is_running: false,
             thread: None,
             should_exit,
-            currently_responsible_shimejis: vec![],
+            currently_responsible_shimejis: 0,
             sender: None,
         }
     }
@@ -69,32 +153,11 @@ impl ShimejiBucket {
         let should_exit = self.should_exit.clone();
         let id = self.id;
         log::trace!("Initting bucket id: {id}");
-        let (sender, receiver) = mpsc::channel::<BucketThreadMessage>();
+        let (sender, receiver) = mpsc::channel();
         let thread = thread::Builder::new()
             .name(format!("Bucket thread {}", &id))
             .spawn(move || {
-                let receiver = receiver;
-                let mut inner_vec = vec![];
-                match receiver.recv().expect("should receive succesfully") {
-                    Add(val) => {}
-                    _ => unimplemented!(),
-                };
-                loop {
-                    if should_exit.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let val = match receiver.try_recv() {
-                        Err(mpsc::TryRecvError::Empty) => None,
-                        Err(_) => break,
-                        Ok(val) => Some(val),
-                    };
-                    if val.is_some() {
-                        match val.unwrap() {
-                            Add(new_shimeji) => inner_vec.push(new_shimeji),
-                            Remove(_) => todo!(),
-                        }
-                    }
-                }
+                loop_for_shimeji_execution(receiver, should_exit);
             })?;
         self.sender = Some(sender.clone());
         self.thread = Some(thread);
@@ -114,26 +177,26 @@ impl ShimejiBucket {
     ///
     /// # Errors
     /// Errors if `!self.is_running` or if `self.sender` == `None`.
-    pub fn add(&mut self, shimeji: Shimeji) -> Result<(), BucketError> {
+    pub fn add(&mut self, shimeji: ShimejiData) -> Result<(), BucketError> {
         if !self.is_running {
             return Err(BucketError::NotRunning);
         }
-
+        self.currently_responsible_shimejis += 1;
         let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
         sender.send(BucketThreadMessage::Add(shimeji)).unwrap();
         Ok(())
     }
-    pub fn len(&self) -> usize {
-        self.currently_responsible_shimejis.len()
+    pub fn contained_shimejis(&self) -> usize {
+        self.currently_responsible_shimejis
     }
 }
 
 #[derive(Debug)]
-pub struct Shimeji {
+pub struct ShimejiData {
     name: String,
 }
 
-impl Shimeji {
+impl ShimejiData {
     pub fn with_config(config: &ShimejiConfig) -> Self {
         Self {
             name: config.name.clone(),

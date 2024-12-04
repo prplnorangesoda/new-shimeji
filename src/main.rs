@@ -1,31 +1,17 @@
 #![deny(unused_must_use)]
 #![allow(dead_code)]
-#![allow(unused_imports)]
+
 use anyhow::Context as _;
 use std::{
     fs::File,
-    num::NonZeroU32,
-    process::exit,
-    rc::Rc,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     thread,
     time::Duration,
-};
-use tao::{
-    dpi::{LogicalSize, Size},
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
 };
 
 mod rgba;
 mod shimeji;
-
-use rgba::Rgba;
-use shimeji::{BucketError, Shimeji, ShimejiBucket};
+use shimeji::{BucketError, ShimejiBucket, ShimejiData};
 
 use derive_more::{derive::From, Display, Error};
 
@@ -47,7 +33,6 @@ struct BucketManager {
     should_exit: Arc<AtomicBool>,
 }
 impl BucketManager {
-    ///
     /// # Panics
     /// Panics if `amount == 0`.
     pub fn new(amount: usize) -> Self {
@@ -69,7 +54,7 @@ impl BucketManager {
             .buckets
             .iter_mut()
             .reduce(|acc, bucket| {
-                if bucket.len() > acc.len() {
+                if bucket.contained_shimejis() < acc.contained_shimejis() {
                     bucket
                 } else {
                     acc
@@ -79,7 +64,7 @@ impl BucketManager {
 
         log::info!("Adding a new shimeji to bucket id: {}", bucket.id);
 
-        let shimeji = Shimeji::with_config(conf);
+        let shimeji = ShimejiData::with_config(conf);
         bucket.add(shimeji)?;
         Ok(())
     }
@@ -92,7 +77,7 @@ impl BucketManager {
 
         loop {
             log::trace!("Yielding main thread");
-            thread::sleep(Duration::from_secs(0));
+            thread::sleep(Duration::ZERO);
             thread::yield_now();
         }
     }
@@ -108,12 +93,12 @@ fn main() -> anyhow::Result<()> {
         .env()
         .init()
         .expect("Should be able to set up logger");
-    log::info!("Going");
+    log::debug!("Starting");
 
     let parallelism = thread::available_parallelism()
         .context("Failed to get available parallelism for this system")?
         .get();
-    log::info!("Available parallelism: {}", parallelism);
+    log::debug!("Available parallelism: {}", parallelism);
 
     let manager = BucketManager::new(parallelism);
 
@@ -132,6 +117,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let tray_handle = tray_item::TrayItem::new("Example", icon_red).unwrap();
+    log::debug!("Running manager");
     manager.run(tray_handle)?;
     Ok(())
     // let event_loop = EventLoop::new();
@@ -207,9 +193,43 @@ fn main() -> anyhow::Result<()> {
     // });
 }
 
-mod test {
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn init_logger() {
+        // It is non-essential if the logger fails, which can often happen
+        // since Rust by default runs threads in parallel.
+        // SimpleLogger errors if it was already initialized.
+        simple_logger::SimpleLogger::new()
+            .with_level(log::LevelFilter::Trace)
+            .env()
+            .init()
+            .ok();
+    }
     #[test]
-    fn shimejis_are_added_correctly() -> anyhow::Result<()> {
+    #[should_panic]
+    fn panics_on_amount_0() {
+        let _ = BucketManager::new(0);
+    }
+
+    #[test]
+    fn buckets_are_created_successfully() {
+        init_logger();
+        let manager = BucketManager::new(1);
+
+        assert!(manager.buckets.first().is_some());
+    }
+
+    #[test]
+    fn buckets_receive_shimeji_sequentially() -> anyhow::Result<()> {
+        init_logger();
+        let mut manager = BucketManager::new(1);
+
+        manager.add_shimeji(&ShimejiConfig {
+            name: String::from("example"),
+        })?;
+
+        assert_eq!(manager.buckets.first().unwrap().contained_shimejis(), 1);
         Ok(())
     }
 }
