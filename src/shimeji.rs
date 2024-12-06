@@ -1,18 +1,13 @@
 use derive_more::derive::{Display, Error, From};
 use std::{
-    cell::{Cell, RefCell},
-    ops::Deref,
+    cell::Cell,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant, SystemTime},
-};
-use winit::{
-    application::ApplicationHandler,
-    platform::pump_events::{EventLoopExtPumpEvents, PumpStatus},
+    time::Instant,
 };
 use winit::{event_loop::EventLoop, platform::x11::EventLoopBuilderExtX11, window::Window};
 
@@ -62,19 +57,6 @@ struct ShimejiWindow {
     last_rendered_frame: Cell<Instant>,
 }
 
-impl ApplicationHandler for ShimejiWindow {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        unimplemented!()
-    }
-    fn window_event(
-        &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
-    ) {
-        unimplemented!()
-    }
-}
 impl ShimejiWindow {
     pub fn new(data: ShimejiData) -> Self {
         let event_loop = EventLoop::builder().with_x11().build().unwrap();

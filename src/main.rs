@@ -8,6 +8,10 @@ use std::{
     thread,
     time::Duration,
 };
+use winit::{
+    application::ApplicationHandler, error::EventLoopError, event_loop::EventLoop,
+    platform::x11::EventLoopBuilderExtX11, window::WindowAttributes,
+};
 
 mod rgba;
 mod shimeji;
@@ -25,6 +29,7 @@ enum ManagerError {
     /// Should never happen.
     NoBucketsAvailable,
     BucketError(BucketError),
+    EventLoopError(EventLoopError),
 }
 
 #[derive(Debug)]
@@ -32,6 +37,27 @@ struct BucketManager {
     buckets: Vec<ShimejiBucket>,
     should_exit: Arc<AtomicBool>,
 }
+
+impl ApplicationHandler for BucketManager {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        log::debug!("Resumed");
+        for bucket in &self.buckets {
+            log::info!("Here!");
+            log::debug!("{bucket:?}");
+        }
+    }
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        for bucket in &self.buckets {
+            log::debug!("{bucket:?}")
+        }
+    }
+}
+
 impl BucketManager {
     /// # Panics
     /// Panics if `amount == 0`.
@@ -74,12 +100,9 @@ impl BucketManager {
         };
         self.add_shimeji(&example_config)?;
         tray_handle.add_label("label").unwrap();
-
-        loop {
-            log::trace!("Yielding main thread");
-            thread::sleep(Duration::ZERO);
-            thread::yield_now();
-        }
+        let event_loop = EventLoop::builder().with_x11().build().unwrap();
+        event_loop.run_app(&mut self)?;
+        Ok(())
     }
 }
 
@@ -102,8 +125,7 @@ fn main() -> anyhow::Result<()> {
 
     let manager = BucketManager::new(parallelism);
 
-    let path = std::env!("HOME").to_owned() + "/tray_icon-red.png";
-
+    let path = std::option_env!("HOME").unwrap_or("/home/lucy").to_owned() + "/tray_icon-red.png";
     dbg!(&path);
     let decoder_red = png::Decoder::new(File::open(&path).unwrap());
     let (info_red, mut reader_red) = decoder_red.read_info().unwrap();
