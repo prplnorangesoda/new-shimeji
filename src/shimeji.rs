@@ -1,16 +1,25 @@
 use derive_more::derive::{Display, Error, From};
+use softbuffer::{Context, Surface};
 use std::{
     cell::Cell,
+    num::NonZeroU32,
+    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc,
     },
     thread::{self, JoinHandle},
-    time::Instant,
+    time::{Duration, Instant},
 };
-use winit::{event_loop::EventLoop, platform::x11::EventLoopBuilderExtX11, window::Window};
+use winit::{
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
+    platform::x11::EventLoopBuilderExtX11,
+    window::{Window, WindowId},
+};
 
+use super::rgba::Rgba;
 #[derive(Debug, Error, Display, From)]
 pub enum BucketError {
     DoubleInit,
@@ -34,9 +43,17 @@ pub struct ShimejiBucket {
     sender: Option<Sender<BucketThreadMessage>>,
 }
 
+impl PartialEq for ShimejiBucket {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for ShimejiBucket {}
+
+#[derive(Debug)]
 pub enum BucketThreadMessage {
-    Add(ShimejiData),
-    Remove(ShimejiData),
+    Add(Window, ShimejiData),
+    Remove(WindowId, ShimejiData),
 }
 
 use BucketThreadMessage::*;
@@ -45,34 +62,58 @@ use crate::ShimejiConfig;
 
 impl Drop for ShimejiBucket {
     fn drop(&mut self) {
+        log::debug!("Dropping bucket id {}", self.id);
         self.should_exit.store(true, Ordering::Release);
         self.join_thread().ok();
     }
 }
 
 struct ShimejiWindow {
-    window: Option<Window>,
-    event_loop: EventLoop<()>,
+    window: Rc<Window>,
+    context: Context<Rc<Window>>,
+    surface: Surface<Rc<Window>, Rc<Window>>,
     data: ShimejiData,
     last_rendered_frame: Cell<Instant>,
 }
 
 impl ShimejiWindow {
-    pub fn new(data: ShimejiData) -> Self {
-        let event_loop = EventLoop::builder().with_x11().build().unwrap();
+    pub fn new(window: Window, data: ShimejiData) -> Self {
+        let rc = Rc::new(window);
+        let context = Context::new(Rc::clone(&rc)).unwrap();
         Self {
-            event_loop,
-            window: None,
+            window: Rc::clone(&rc),
+            surface: Surface::new(&context, Rc::clone(&rc)).unwrap(),
+            context,
             last_rendered_frame: Cell::new(Instant::now()),
             data,
         }
     }
     pub fn update(&mut self) {
         // self.event_loop.pump_app_events(Some(Duration::ZERO), self);
-        unimplemented!()
+        let (width, height) = {
+            let size = self.window.inner_size();
+            (size.width, size.height)
+        };
+        self.surface
+            .resize(
+                NonZeroU32::new(width).unwrap(),
+                NonZeroU32::new(height).unwrap(),
+            )
+            .unwrap();
+
+        let mut buffer = self.surface.buffer_mut().unwrap();
+        // println!("Buffer length: {}", buffer.len());
+        // println!(
+        //     "First four buffer bytes: {:b} {:b} {:b} {:b}",
+        //     buffer[0], buffer[1], buffer[2], buffer[3]
+        // );
+        let color_u32 = Rgba::new(0, 0, 0, 10).to_softbuf_u32();
+        buffer.fill(color_u32);
+        buffer.present().unwrap();
     }
 }
 
+/// The thread is started, we are executing.
 #[inline]
 fn loop_for_shimeji_execution(
     receiver: Receiver<BucketThreadMessage>,
@@ -83,12 +124,18 @@ fn loop_for_shimeji_execution(
         match receiver.recv().expect(
             "should be able to receive value, else sender hung up without sending single shimeji",
         ) {
-            Add(val) => {
-                log::debug!("Received shimeji: {val:?}");
+            Add(window, data) => {
+                log::debug!(
+                    "Received initial window: {0:?}, data: {1:?}",
+                    &window,
+                    &data
+                );
+                inner_vec.push(ShimejiWindow::new(window, data))
             }
             _ => unimplemented!(),
         };
-        'has_shimeji: loop {
+        'has_window: loop {
+            log::debug!("Looping 'has_window");
             if should_exit.load(Ordering::Relaxed) {
                 break;
             }
@@ -100,16 +147,21 @@ fn loop_for_shimeji_execution(
             };
 
             if val.is_some() {
-                match val.unwrap() {
-                    Add(new_shimeji) => inner_vec.push(ShimejiWindow::new(new_shimeji)),
-                    Remove(_) => todo!(),
+                let val = unsafe { val.unwrap_unchecked() };
+                match val {
+                    Add(window, data) => {
+                        log::debug!("Received window: {0:?}, data: {1:?}", &window, &data);
+                        inner_vec.push(ShimejiWindow::new(window, data))
+                    }
+                    Remove(..) => todo!(),
                 }
             }
             if inner_vec.is_empty() {
-                break 'has_shimeji;
+                break 'has_window;
             }
             for shimeji in inner_vec.iter_mut() {
                 shimeji.update();
+                thread::sleep(Duration::from_secs(1))
             }
         }
     }
@@ -147,25 +199,28 @@ impl ShimejiBucket {
         Ok(())
     }
     pub fn join_thread(&mut self) -> Result<(), BucketError> {
-        if self.thread.is_none() {
+        if !self.is_running || self.thread.is_none() {
             return Ok(());
         }
         match self.thread.take().unwrap().join() {
             Ok(_) => (),
             Err(huh) => println!("THREAD JOIN ERROR: {huh:?}"),
         };
+        self.is_running = false;
         Ok(())
     }
     ///
     /// # Errors
     /// Errors if `!self.is_running` or if `self.sender` == `None`.
-    pub fn add(&mut self, shimeji: ShimejiData) -> Result<(), BucketError> {
+    pub fn add(&mut self, shimeji: ShimejiData, window: Window) -> Result<(), BucketError> {
         if !self.is_running {
             return Err(BucketError::NotRunning);
         }
         self.currently_responsible_shimejis += 1;
         let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
-        sender.send(BucketThreadMessage::Add(shimeji)).unwrap();
+        sender
+            .send(BucketThreadMessage::Add(window, shimeji))
+            .unwrap();
         Ok(())
     }
     pub fn contained_shimejis(&self) -> usize {

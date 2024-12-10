@@ -1,10 +1,15 @@
 #![deny(unused_must_use)]
 #![allow(dead_code)]
+#![allow(unused_imports)]
 
 use anyhow::Context as _;
+use itertools::Itertools;
 use std::{
+    cell::Cell,
     fs::File,
-    sync::{atomic::AtomicBool, Arc},
+    ops::{Deref, DerefMut},
+    rc::Rc,
+    sync::{atomic::AtomicBool, Arc, LazyLock, Mutex},
     thread,
     time::Duration,
 };
@@ -34,28 +39,43 @@ enum ManagerError {
 
 #[derive(Debug)]
 struct BucketManager {
+    /// Shimejis that are waiting
+    /// for a context / window to be sent to a bucket.
+    pending_shimejis: Vec<ShimejiConfig>,
     buckets: Vec<ShimejiBucket>,
     should_exit: Arc<AtomicBool>,
 }
 
+const WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
+    WindowAttributes::default()
+        .with_visible(true)
+        .with_transparent(true)
+        .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+});
+
 impl ApplicationHandler for BucketManager {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         log::debug!("Resumed");
-        for bucket in &self.buckets {
-            log::info!("Here!");
-            log::debug!("{bucket:?}");
-        }
+
+        self.address_pending_shimejis(event_loop);
     }
+
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
-        for bucket in &self.buckets {
-            log::debug!("{bucket:?}")
+        use winit::event::WindowEvent::*;
+        // if self.should_exit.load(std::sync::atomic::Ordering::Acquire) {
+        //     event_loop.exit()
+        // }
+        match event {
+            RedrawRequested => {}
+            _ => {}
         }
     }
+    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, _event: ()) {}
 }
 
 impl BucketManager {
@@ -71,42 +91,61 @@ impl BucketManager {
             buckets.push(bucket);
         }
         Self {
+            pending_shimejis: vec![],
             should_exit,
             buckets,
         }
     }
-    pub fn add_shimeji(&mut self, conf: &ShimejiConfig) -> Result<(), ManagerError> {
-        let bucket = self
-            .buckets
-            .iter_mut()
-            .reduce(|acc, bucket| {
-                if bucket.contained_shimejis() < acc.contained_shimejis() {
-                    bucket
-                } else {
-                    acc
-                }
-            })
-            .ok_or(ManagerError::NoBucketsAvailable)?;
-
-        log::info!("Adding a new shimeji to bucket id: {}", bucket.id);
-
-        let shimeji = ShimejiData::with_config(conf);
-        bucket.add(shimeji)?;
-        Ok(())
+    pub fn add_shimeji(&mut self, conf: ShimejiConfig) {
+        self.pending_shimejis.push(conf)
     }
     pub fn run(mut self, mut tray_handle: tray_item::TrayItem) -> Result<(), ManagerError> {
-        let example_config = ShimejiConfig {
-            name: String::from("Name"),
-        };
-        self.add_shimeji(&example_config)?;
-        tray_handle.add_label("label").unwrap();
+        let copy = Arc::clone(&self.should_exit);
+        tray_handle
+            .add_menu_item("Kill", move || {
+                copy.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .unwrap();
         let event_loop = EventLoop::builder().with_x11().build().unwrap();
         event_loop.run_app(&mut self)?;
+        log::debug!("Manager returned");
         Ok(())
+    }
+
+    fn address_pending_shimejis(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        // If we don't collect here, the compiler
+        // believes a reference is still in use
+        let mut buckets_by_count = self
+            .buckets
+            .iter()
+            .sorted_by_key(|x| x.contained_shimejis())
+            .enumerate()
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .cycle();
+
+        let mut buckets: Vec<_> = self
+            .buckets
+            .iter_mut()
+            .sorted_by_key(|x| x.contained_shimejis())
+            .collect();
+
+        while let Some(pending_shimeji) = self.pending_shimejis.pop() {
+            let index = buckets_by_count.next().unwrap();
+            let window = event_loop
+                .create_window(WINDOW_ATTRIBS.clone())
+                .expect("should be able to create window for shimeji");
+
+            buckets[index]
+                .deref_mut()
+                .add(ShimejiData::with_config(&pending_shimeji), window)
+                .expect("should be able to add shimeji to bucket");
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShimejiConfig {
     name: String,
 }
@@ -123,8 +162,6 @@ fn main() -> anyhow::Result<()> {
         .get();
     log::debug!("Available parallelism: {}", parallelism);
 
-    let manager = BucketManager::new(parallelism);
-
     let path = std::option_env!("HOME").unwrap_or("/home/lucy").to_owned() + "/tray_icon-red.png";
     dbg!(&path);
     let decoder_red = png::Decoder::new(File::open(&path).unwrap());
@@ -140,7 +177,18 @@ fn main() -> anyhow::Result<()> {
 
     let tray_handle = tray_item::TrayItem::new("Example", icon_red).unwrap();
     log::debug!("Running manager");
+    let mut manager = BucketManager::new(parallelism);
+
+    let example_config = ShimejiConfig {
+        name: String::from("Name"),
+    };
+
+    for _ in 0..50 {
+        manager.add_shimeji(example_config.clone());
+    }
+    manager.add_shimeji(example_config);
     manager.run(tray_handle)?;
+    log::debug!("At the end");
     Ok(())
     // let event_loop = EventLoop::new();
     // let window = WindowBuilder::new()
@@ -247,9 +295,9 @@ mod tests {
         init_logger();
         let mut manager = BucketManager::new(1);
 
-        manager.add_shimeji(&ShimejiConfig {
+        manager.add_shimeji(ShimejiConfig {
             name: String::from("example"),
-        })?;
+        });
 
         assert_eq!(manager.buckets.first().unwrap().contained_shimejis(), 1);
         Ok(())
