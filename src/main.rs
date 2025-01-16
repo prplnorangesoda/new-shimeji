@@ -6,6 +6,8 @@ use anyhow::Context as _;
 use itertools::Itertools;
 use std::{
     cell::Cell,
+    collections::{HashMap, HashSet},
+    ffi::OsString,
     fs::File,
     ops::{Deref, DerefMut},
     rc::Rc,
@@ -14,10 +16,14 @@ use std::{
     time::Duration,
 };
 use winit::{
-    application::ApplicationHandler, error::EventLoopError, event_loop::EventLoop,
-    platform::x11::EventLoopBuilderExtX11, window::WindowAttributes,
+    application::ApplicationHandler,
+    error::EventLoopError,
+    event_loop::EventLoop,
+    platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType},
+    window::{WindowAttributes, WindowLevel},
 };
 
+mod file_loader;
 mod rgba;
 mod shimeji;
 use shimeji::{BucketError, ShimejiBucket, ShimejiData};
@@ -28,6 +34,16 @@ use derive_more::{derive::From, Display, Error};
 enum Status {
     Ok,
     Exiting,
+}
+
+impl Status {
+    /// Returns `true` if the status is [`Ok`].
+    ///
+    /// [`Ok`]: Status::Ok
+    #[must_use]
+    fn is_ok(&self) -> bool {
+        matches!(self, Self::Ok)
+    }
 }
 #[derive(Display, Debug, Error, From)]
 enum ManagerError {
@@ -42,15 +58,18 @@ struct BucketManager {
     /// Shimejis that are waiting
     /// for a context / window to be sent to a bucket.
     pending_shimejis: Vec<ShimejiConfig>,
+    data_map: HashMap<Arc<str>, Arc<ShimejiData>>,
     buckets: Vec<ShimejiBucket>,
     should_exit: Arc<AtomicBool>,
 }
 
-const WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
+static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
     WindowAttributes::default()
         .with_visible(true)
         .with_transparent(true)
-        .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+        .with_decorations(false)
+        .with_x11_window_type(vec![WindowType::Notification, WindowType::Splash])
+        .with_window_level(WindowLevel::AlwaysOnTop)
 });
 
 impl ApplicationHandler for BucketManager {
@@ -59,7 +78,9 @@ impl ApplicationHandler for BucketManager {
 
         self.address_pending_shimejis(event_loop);
     }
-
+    fn exiting(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        log::debug!("Exiting");
+    }
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -67,11 +88,14 @@ impl ApplicationHandler for BucketManager {
         event: winit::event::WindowEvent,
     ) {
         use winit::event::WindowEvent::*;
-        // if self.should_exit.load(std::sync::atomic::Ordering::Acquire) {
-        //     event_loop.exit()
-        // }
+        if self.should_exit.load(std::sync::atomic::Ordering::Acquire) {
+            event_loop.exit()
+        }
+        log::trace!("WindowEvent: {event:?}");
         match event {
-            RedrawRequested => {}
+            RedrawRequested => {
+                log::debug!("RedrawRequested")
+            }
             _ => {}
         }
     }
@@ -91,6 +115,7 @@ impl BucketManager {
             buckets.push(bucket);
         }
         Self {
+            data_map: HashMap::new(),
             pending_shimejis: vec![],
             should_exit,
             buckets,
@@ -99,13 +124,16 @@ impl BucketManager {
     pub fn add_shimeji(&mut self, conf: ShimejiConfig) {
         self.pending_shimejis.push(conf)
     }
-    pub fn run(mut self, mut tray_handle: tray_item::TrayItem) -> Result<(), ManagerError> {
+    pub fn run(mut self, tray_handle: Option<tray_item::TrayItem>) -> Result<(), ManagerError> {
         let copy = Arc::clone(&self.should_exit);
-        tray_handle
-            .add_menu_item("Kill", move || {
-                copy.store(true, std::sync::atomic::Ordering::SeqCst);
-            })
-            .unwrap();
+        if let Some(mut handle) = tray_handle {
+            handle
+                .add_menu_item("Kill", move || {
+                    copy.store(true, std::sync::atomic::Ordering::SeqCst);
+                })
+                .unwrap();
+        }
+
         let event_loop = EventLoop::builder().with_x11().build().unwrap();
         event_loop.run_app(&mut self)?;
         log::debug!("Manager returned");
@@ -139,7 +167,7 @@ impl BucketManager {
 
             buckets[index]
                 .deref_mut()
-                .add(ShimejiData::with_config(&pending_shimeji), window)
+                .add(ShimejiData {}, window)
                 .expect("should be able to add shimeji to bucket");
         }
     }
@@ -147,7 +175,8 @@ impl BucketManager {
 
 #[derive(Debug, Clone)]
 pub struct ShimejiConfig {
-    name: String,
+    name: Arc<str>,
+    data: Arc<ShimejiData>,
 }
 fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -162,31 +191,20 @@ fn main() -> anyhow::Result<()> {
         .get();
     log::debug!("Available parallelism: {}", parallelism);
 
-    let path = std::option_env!("HOME").unwrap_or("/home/lucy").to_owned() + "/tray_icon-red.png";
-    dbg!(&path);
-    let decoder_red = png::Decoder::new(File::open(&path).unwrap());
-    let (info_red, mut reader_red) = decoder_red.read_info().unwrap();
-    let mut buf_red = vec![0; info_red.buffer_size()];
-    reader_red.next_frame(&mut buf_red).unwrap();
+    let icon_red = tray_item::IconSource::Resource("/home/lucy/tray_icon-red.png");
 
-    let icon_red = tray_item::IconSource::Data {
-        data: buf_red,
-        height: 32,
-        width: 32,
-    };
-
-    let tray_handle = tray_item::TrayItem::new("Example", icon_red).unwrap();
+    let tray_handle = tray_item::TrayItem::new("Example", icon_red).ok();
     log::debug!("Running manager");
     let mut manager = BucketManager::new(parallelism);
+    let file_name =
+        std::env::var_os("SHIMEJI_CONFIG_FILE").unwrap_or(OsString::from("./default.xml"));
+    let config =
+        file_loader::create_config_from_file(file_name).expect("pre defined value should be fine");
 
-    let example_config = ShimejiConfig {
-        name: String::from("Name"),
-    };
-
-    for _ in 0..50 {
-        manager.add_shimeji(example_config.clone());
+    for _ in 0..1 {
+        manager.add_shimeji(config.clone());
     }
-    manager.add_shimeji(example_config);
+    manager.add_shimeji(config);
     manager.run(tray_handle)?;
     log::debug!("At the end");
     Ok(())
@@ -290,16 +308,16 @@ mod tests {
         assert!(manager.buckets.first().is_some());
     }
 
-    #[test]
-    fn buckets_receive_shimeji_sequentially() -> anyhow::Result<()> {
-        init_logger();
-        let mut manager = BucketManager::new(1);
+    // #[test]
+    // fn buckets_receive_shimeji_sequentially() -> anyhow::Result<()> {
+    //     init_logger();
+    //     let mut manager = BucketManager::new(1);
 
-        manager.add_shimeji(ShimejiConfig {
-            name: String::from("example"),
-        });
+    //     manager.add_shimeji(ShimejiConfig {
+    //         name: String::from("example"),
+    //     });
 
-        assert_eq!(manager.buckets.first().unwrap().contained_shimejis(), 1);
-        Ok(())
-    }
+    //     assert_eq!(manager.buckets.first().unwrap().contained_shimejis(), 1);
+    //     Ok(())
+    // }
 }

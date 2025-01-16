@@ -107,7 +107,7 @@ impl ShimejiWindow {
         //     "First four buffer bytes: {:b} {:b} {:b} {:b}",
         //     buffer[0], buffer[1], buffer[2], buffer[3]
         // );
-        let color_u32 = Rgba::new(0, 0, 0, 10).to_softbuf_u32();
+        let color_u32 = Rgba::new(0, 50, 0, 10).to_softbuf_u32();
         buffer.fill(color_u32);
         buffer.present().unwrap();
     }
@@ -146,8 +146,7 @@ fn loop_for_shimeji_execution(
                 Ok(val) => Some(val),
             };
 
-            if val.is_some() {
-                let val = unsafe { val.unwrap_unchecked() };
+            if let Some(val) = val {
                 match val {
                     Add(window, data) => {
                         log::debug!("Received window: {0:?}, data: {1:?}", &window, &data);
@@ -161,7 +160,7 @@ fn loop_for_shimeji_execution(
             }
             for shimeji in inner_vec.iter_mut() {
                 shimeji.update();
-                thread::sleep(Duration::from_secs(1))
+                thread::sleep(Duration::from_millis(100))
             }
         }
     }
@@ -202,9 +201,13 @@ impl ShimejiBucket {
         if !self.is_running || self.thread.is_none() {
             return Ok(());
         }
+        {
+            self.sender.take();
+            // drop sender, ensuring any in progress recvs are stopped
+        }
         match self.thread.take().unwrap().join() {
             Ok(_) => (),
-            Err(huh) => println!("THREAD JOIN ERROR: {huh:?}"),
+            Err(huh) => log::error!("THREAD JOIN ERROR: {huh:?}"),
         };
         self.is_running = false;
         Ok(())
@@ -228,15 +231,5 @@ impl ShimejiBucket {
     }
 }
 
-#[derive(Debug)]
-pub struct ShimejiData {
-    name: String,
-}
-
-impl ShimejiData {
-    pub fn with_config(config: &ShimejiConfig) -> Self {
-        Self {
-            name: config.name.clone(),
-        }
-    }
-}
+#[derive(Debug, Clone)]
+pub struct ShimejiData {}
