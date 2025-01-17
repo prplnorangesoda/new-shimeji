@@ -5,7 +5,8 @@
 use anyhow::Context as _;
 use itertools::Itertools;
 use std::{
-    cell::Cell,
+    borrow::{Borrow, BorrowMut},
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     ffi::OsString,
     fs::File,
@@ -20,7 +21,7 @@ use winit::{
     error::EventLoopError,
     event_loop::EventLoop,
     platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType},
-    window::{WindowAttributes, WindowLevel},
+    window::{WindowAttributes, WindowId, WindowLevel},
 };
 
 mod file_loader;
@@ -57,10 +58,10 @@ enum ManagerError {
 struct BucketManager {
     /// Shimejis that are waiting
     /// for a context / window to be sent to a bucket.
-    pending_shimejis: Vec<ShimejiConfig>,
-    data_map: HashMap<Arc<str>, Arc<ShimejiData>>,
-    buckets: Vec<ShimejiBucket>,
     should_exit: Arc<AtomicBool>,
+    pending_shimejis: Vec<ShimejiConfig>,
+    buckets: Vec<Rc<RefCell<ShimejiBucket>>>,
+    buckets_windows_map: HashMap<WindowId, Rc<RefCell<ShimejiBucket>>>,
 }
 
 static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
@@ -112,13 +113,13 @@ impl BucketManager {
         for i in 0..amount {
             let mut bucket = ShimejiBucket::new(i, should_exit.clone());
             bucket.init().expect("should be able to init bucket");
-            buckets.push(bucket);
+            buckets.push(Rc::new(RefCell::new(bucket)));
         }
         Self {
-            data_map: HashMap::new(),
             pending_shimejis: vec![],
             should_exit,
             buckets,
+            buckets_windows_map: HashMap::new(),
         }
     }
     pub fn add_shimeji(&mut self, conf: ShimejiConfig) {
@@ -146,37 +147,43 @@ impl BucketManager {
         let mut buckets_by_count = self
             .buckets
             .iter()
-            .sorted_by_key(|x| x.contained_shimejis())
+            .sorted_by_key(|x| Rc::deref(&x).borrow_mut().contained_shimejis())
             .enumerate()
             .map(|(idx, _)| idx)
             .collect::<Vec<_>>()
             .into_iter()
             .cycle();
 
-        let mut buckets: Vec<_> = self
+        let buckets: Vec<_> = self
             .buckets
             .iter_mut()
-            .sorted_by_key(|x| x.contained_shimejis())
+            .sorted_by_key(|x| Rc::deref(&x).borrow_mut().contained_shimejis())
             .collect();
 
+        // while we still have pending shimejis...
         while let Some(pending_shimeji) = self.pending_shimejis.pop() {
             let index = buckets_by_count.next().unwrap();
             let window = event_loop
                 .create_window(WINDOW_ATTRIBS.clone())
                 .expect("should be able to create window for shimeji");
 
-            buckets[index]
-                .deref_mut()
+            let id = window.id();
+
+            let bucket_rc = &buckets[index];
+            let mut bucket_to_add_to = Rc::deref(bucket_rc).borrow_mut();
+            bucket_to_add_to
                 .add(ShimejiData {}, window)
                 .expect("should be able to add shimeji to bucket");
+            let clone = Rc::clone(bucket_rc);
+            self.buckets_windows_map.insert(id, clone);
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ShimejiConfig {
-    name: Arc<str>,
-    data: Arc<ShimejiData>,
+    pub name: Arc<str>,
+    pub data: Arc<ShimejiData>,
 }
 fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -198,8 +205,8 @@ fn main() -> anyhow::Result<()> {
     let mut manager = BucketManager::new(parallelism);
     let file_name =
         std::env::var_os("SHIMEJI_CONFIG_FILE").unwrap_or(OsString::from("./default.xml"));
-    let config =
-        file_loader::create_config_from_file(file_name).expect("pre defined value should be fine");
+    let config = file_loader::create_config_from_file_name(file_name)
+        .expect("pre defined value should be fine");
 
     for _ in 0..1 {
         manager.add_shimeji(config.clone());

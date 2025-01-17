@@ -7,20 +7,47 @@ use crate::{shimeji::ShimejiData, ShimejiConfig};
 
 static VALID_SHIMEJI_ATTRIBUTES: [&'static str; 2] = ["name", "gravity"];
 
-#[derive(Debug, From, Error, Display)]
+#[derive(Debug, Error, Display)]
 pub enum ConfigCreationError {
     MissingAttribute { attribute: &'static str },
+    MissingItem { item: &'static str },
 }
-pub fn create_config_from_file(
+
+#[derive(Debug)]
+pub struct AnimationXml {
+    frames: Vec<FrameXml>,
+}
+
+#[derive(Debug)]
+pub struct FrameXml {}
+
+#[derive(Debug)]
+pub enum XmlItem {
+    Animation(AnimationXml),
+}
+
+pub fn create_config_from_file_name(
     file_name: impl Into<OsString>,
 ) -> Result<ShimejiConfig, ConfigCreationError> {
     let file_name: OsString = file_name.into();
+    let file = File::open(file_name).expect("file to open should exist");
+    let parsed = parse_xml_file_for_shimeji_data(file);
 
-    let file = File::open(file_name).expect("File name should be valid");
+    let name = String::from("d");
+    return Ok(ShimejiConfig {
+        name: Arc::from(name.as_str()),
+        data: Arc::new(ShimejiData {}),
+    });
+}
 
+#[derive(Debug, Error, Display)]
+enum XmlError {
+    MultipleShimeji,
+}
+fn parse_xml_file_for_shimeji_data(file: File) -> Result<Vec<XmlItem>, XmlError> {
     let xml_reader = xml::EventReader::new(file);
 
-    let mut document_ended_successfully = false;
+    let mut in_shimeji = false;
     for xml_event in xml_reader {
         match xml_event {
             Err(x) => {
@@ -31,6 +58,10 @@ pub fn create_config_from_file(
                 name, attributes, ..
             }) => match name.local_name.as_str() {
                 "Shimeji" => {
+                    if in_shimeji {
+                        return Err(XmlError::MultipleShimeji);
+                    }
+                    in_shimeji = true;
                     let mut attributes_retrieved =
                         HashMap::with_capacity(VALID_SHIMEJI_ATTRIBUTES.len());
                     for attr in attributes {
@@ -45,18 +76,19 @@ pub fn create_config_from_file(
                 }
             },
             Ok(XmlEvent::EndDocument) => {
-                document_ended_successfully = true;
                 break;
             }
+            Ok(XmlEvent::EndElement { name }) => match name.local_name.as_str() {
+                "Shimeji" => {
+                    in_shimeji = false;
+                }
+                _ => continue,
+            },
             _ => {
                 log::warn!("Unhandled event");
                 continue;
             }
         }
     }
-    let name = String::from("d");
-    return Ok(ShimejiConfig {
-        name: Arc::from(name.as_str()),
-        data: Arc::new(ShimejiData {}),
-    });
+    return Ok(vec![]);
 }
