@@ -147,7 +147,7 @@ impl BucketManager {
         let mut buckets_by_count = self
             .buckets
             .iter()
-            .sorted_by_key(|x| Rc::deref(&x).borrow_mut().contained_shimejis())
+            .sorted_by_key(|x| Rc::deref(x).borrow_mut().contained_shimejis())
             .enumerate()
             .map(|(idx, _)| idx)
             .collect::<Vec<_>>()

@@ -179,7 +179,7 @@ impl ShimejiBucket {
             sender: None,
         }
     }
-    pub fn init<'a>(&mut self) -> Result<(), BucketError> {
+    pub fn init(&mut self) -> Result<(), BucketError> {
         if self.is_running {
             return Err(BucketError::DoubleInit);
         }
