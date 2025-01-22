@@ -119,11 +119,17 @@ fn loop_for_shimeji_execution(
     receiver: Receiver<BucketThreadMessage>,
     should_exit: Arc<AtomicBool>,
 ) {
-    while !should_exit.load(Ordering::Relaxed) {
+    'running: while !should_exit.load(Ordering::Relaxed) {
         let mut inner_vec = vec![];
-        match receiver.recv().expect(
-            "should be able to receive value, else sender hung up without sending single shimeji",
-        ) {
+        let recv = receiver.recv();
+        let recv = match recv {
+            Ok(val) => val,
+            Err(_) => {
+                log::debug!("Sender hung up without sending any shimeji");
+                break 'running;
+            }
+        };
+        match recv {
             Add(window, data) => {
                 log::debug!(
                     "Received initial window: {0:?}, data: {1:?}",
@@ -135,9 +141,10 @@ fn loop_for_shimeji_execution(
             _ => unimplemented!(),
         };
         'has_window: loop {
-            log::debug!("Looping 'has_window");
+            log::trace!("Looping 'has_window");
             if should_exit.load(Ordering::Relaxed) {
-                break;
+                log::debug!("Should exit, breaking loop");
+                break 'running;
             }
             // add a new shimeji, if we're waiting to receive one
             let val = match receiver.try_recv() {
@@ -156,6 +163,7 @@ fn loop_for_shimeji_execution(
                 }
             }
             if inner_vec.is_empty() {
+                log::debug!("No windows in inner_vec! Stopping 'has_window");
                 break 'has_window;
             }
             for shimeji in inner_vec.iter_mut() {
@@ -184,11 +192,10 @@ impl ShimejiBucket {
             return Err(BucketError::DoubleInit);
         }
         let should_exit = self.should_exit.clone();
-        let id = self.id;
-        log::trace!("Initting bucket id: {id}");
+        log::trace!("Initting bucket id: {}", &self.id);
         let (sender, receiver) = mpsc::channel();
         let thread = thread::Builder::new()
-            .name(format!("Bucket thread {}", &id))
+            .name(format!("Bucket {} thread", &self.id))
             .spawn(move || {
                 loop_for_shimeji_execution(receiver, should_exit);
             })?;
@@ -201,13 +208,11 @@ impl ShimejiBucket {
         if !self.is_running || self.thread.is_none() {
             return Ok(());
         }
-        {
-            self.sender.take();
-            // drop sender, ensuring any in progress recvs are stopped
-        }
+        // drop sender, ensuring any in progress recvs are stopped
+        drop(self.sender.take());
         match self.thread.take().unwrap().join() {
-            Ok(_) => (),
-            Err(huh) => log::error!("THREAD JOIN ERROR: {huh:?}"),
+            Ok(_) => log::debug!("Thread joined successfully on id {}", self.id),
+            Err(huh) => log::error!("THREAD JOIN ERROR on id {}: {huh:?}", self.id),
         };
         self.is_running = false;
         Ok(())
@@ -232,4 +237,6 @@ impl ShimejiBucket {
 }
 
 #[derive(Debug, Clone)]
-pub struct ShimejiData {}
+pub struct ShimejiData {
+    // frames: Vec<Frame>,
+}

@@ -9,7 +9,7 @@ tray-item     = { version = "0.10.0", features = ["ksni"] }
 anyhow        = "1.0.93"
 log           = "0.4.22"
 native-dialog = "0.7.0"
-png           = "0.16"
+png           = "0.17"
 simple_logger = "5.0.0"
 softbuffer    = "0.4.6"
 winit         = "0.30.5"

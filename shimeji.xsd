@@ -6,7 +6,7 @@
         <xs:element name="Animation" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>
-              <xs:element name="frame" maxOccurs="unbounded">
+              <xs:element name="frame" minOccurs="1" maxOccurs="unbounded">
                 <xs:complexType>
                   <xs:attribute name="number" type="xs:integer" use="required" />
                   <xs:attribute name="file" use="required" />
