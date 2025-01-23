@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 use winit::{
+    dpi::{LogicalPosition, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
     platform::x11::EventLoopBuilderExtX11,
@@ -136,6 +137,24 @@ fn loop_for_shimeji_execution(
                     &window,
                     &data
                 );
+                let monitor = window.current_monitor();
+                match monitor {
+                    Some(monitor) => {
+                        // log::debug!("monitor: {monitor:?}");
+                        let size = monitor.size();
+                        let position = window.outer_position().unwrap();
+                        log::debug!("monitor size: {size:?}");
+                        log::debug!("window position: {position:?}");
+                        window.set_outer_position(PhysicalPosition::new(
+                            0,
+                            size.height - window.inner_size().height,
+                        ));
+                    }
+                    None => {
+                        log::warn!("Current monitor could not be detected");
+                        window.set_outer_position(PhysicalPosition::new(0, 0));
+                    }
+                }
                 inner_vec.push(ShimejiWindow::new(window, data))
             }
             _ => unimplemented!(),
