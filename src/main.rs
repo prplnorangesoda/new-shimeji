@@ -1,26 +1,23 @@
 #![deny(unused_must_use)]
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
 use anyhow::Context as _;
+use cfg_if::cfg_if;
 use itertools::Itertools;
 use std::{
-    borrow::{Borrow, BorrowMut},
-    cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    cell::RefCell,
+    collections::HashMap,
     ffi::OsString,
-    fs::File,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     rc::Rc,
-    sync::{atomic::AtomicBool, Arc, LazyLock, Mutex},
+    sync::{atomic::AtomicBool, Arc, LazyLock},
     thread,
-    time::Duration,
 };
 use winit::{
     application::ApplicationHandler,
     error::EventLoopError,
-    event_loop::EventLoop,
-    platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType},
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop},
     window::{WindowAttributes, WindowId, WindowLevel},
 };
 
@@ -56,39 +53,52 @@ enum ManagerError {
 
 #[derive(Debug)]
 struct BucketManager {
+    should_exit: Arc<AtomicBool>,
     /// Shimejis that are waiting
     /// for a context / window to be sent to a bucket.
-    should_exit: Arc<AtomicBool>,
-    pending_shimejis: Vec<ShimejiConfig>,
+    pending_shimejis: Vec<Arc<ShimejiData>>,
     buckets: Vec<Rc<RefCell<ShimejiBucket>>>,
     buckets_windows_map: HashMap<WindowId, Rc<RefCell<ShimejiBucket>>>,
 }
+cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11, WindowType};
+        static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
+            WindowAttributes::default()
+                .with_visible(true)
+                .with_transparent(true)
+                .with_decorations(false)
+                .with_x11_window_type(vec![WindowType::Dock])
+                .with_window_level(WindowLevel::AlwaysOnTop)
+        });
+    } else {
+        static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
+            WindowAttributes::default()
+                .with_visible(true)
+                .with_transparent(true)
+                .with_decorations(false)
+                .with_window_level(WindowLevel::AlwaysOnTop)
+        });
+    }
 
-static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
-    WindowAttributes::default()
-        .with_visible(true)
-        .with_transparent(true)
-        .with_decorations(false)
-        .with_x11_window_type(vec![WindowType::Notification, WindowType::Splash])
-        .with_window_level(WindowLevel::AlwaysOnTop)
-});
+}
 
 impl ApplicationHandler for BucketManager {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         log::debug!("Resumed");
 
         self.address_pending_shimejis(event_loop);
     }
-    fn exiting(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         log::debug!("Exiting");
     }
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
-        _window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
     ) {
-        use winit::event::WindowEvent::*;
+        use WindowEvent::*;
         if self.should_exit.load(std::sync::atomic::Ordering::Acquire) {
             event_loop.exit()
         }
@@ -100,7 +110,7 @@ impl ApplicationHandler for BucketManager {
             _ => {}
         }
     }
-    fn user_event(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop, _event: ()) {}
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {}
 }
 
 impl BucketManager {
@@ -122,8 +132,8 @@ impl BucketManager {
             buckets_windows_map: HashMap::new(),
         }
     }
-    pub fn add_shimeji(&mut self, conf: ShimejiConfig) {
-        self.pending_shimejis.push(conf)
+    pub fn add_shimeji(&mut self, pending: Arc<ShimejiData>) {
+        self.pending_shimejis.push(pending)
     }
     pub fn run(mut self, tray_handle: Option<tray_item::TrayItem>) -> Result<(), ManagerError> {
         let copy = Arc::clone(&self.should_exit);
@@ -135,7 +145,13 @@ impl BucketManager {
                 .unwrap();
         }
 
-        let event_loop = EventLoop::builder().with_x11().build().unwrap();
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let event_loop = EventLoop::builder().with_x11().build().unwrap();
+            } else {
+                let event_loop = EventLoop::new().unwrap();
+            }
+        }
         event_loop.run_app(&mut self)?;
         log::debug!("Manager returned");
         Ok(())
@@ -157,7 +173,7 @@ impl BucketManager {
         let buckets: Vec<_> = self
             .buckets
             .iter_mut()
-            .sorted_by_key(|x| Rc::deref(&x).borrow_mut().contained_shimejis())
+            .sorted_by_key(|x| Rc::deref(x).borrow_mut().contained_shimejis())
             .collect();
 
         // while we still have pending shimejis...
@@ -172,18 +188,12 @@ impl BucketManager {
             let bucket_rc = &buckets[index];
             let mut bucket_to_add_to = Rc::deref(bucket_rc).borrow_mut();
             bucket_to_add_to
-                .add(ShimejiData {}, window)
+                .add(pending_shimeji, window)
                 .expect("should be able to add shimeji to bucket");
             let clone = Rc::clone(bucket_rc);
             self.buckets_windows_map.insert(id, clone);
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ShimejiConfig {
-    pub name: Arc<str>,
-    pub data: Arc<ShimejiData>,
 }
 fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
@@ -205,8 +215,8 @@ fn main() -> anyhow::Result<()> {
     let mut manager = BucketManager::new(parallelism);
     let file_name =
         std::env::var_os("SHIMEJI_CONFIG_FILE").unwrap_or(OsString::from("./default.xml"));
-    let config = file_loader::create_config_from_file_name(file_name)
-        .expect("pre defined value should be fine");
+    let config = file_loader::create_shimeji_data_from_file_name(file_name)?;
+    let config = Arc::new(config);
 
     for _ in 0..1 {
         manager.add_shimeji(config.clone());
@@ -215,77 +225,6 @@ fn main() -> anyhow::Result<()> {
     manager.run(tray_handle)?;
     log::debug!("At the end");
     Ok(())
-    // let event_loop = EventLoop::new();
-    // let window = WindowBuilder::new()
-    //     .with_decorations(true)
-    //     .with_transparent(true)
-    //     .with_always_on_top(true)
-    //     .with_min_inner_size(LogicalSize::new(100, 100))
-    //     .build(&event_loop)
-    //     .context("Building initial window failed")?;
-
-    // let (window, _context, mut surface) = {
-    //     let window = Rc::new(window);
-    //     let context = softbuffer::Context::new(window.clone()).unwrap();
-    //     let surface = softbuffer::Surface::new(&context, window.clone()).unwrap();
-    //     (window, context, surface)
-    // };
-
-    // println!("Current Monitor: {:?}", window.current_monitor());
-    // window.set_title("Awesome window!");
-    // window
-    //     .set_ignore_cursor_events(true)
-    //     .expect("Should be possible to ignore cursor events");
-    // // if cfg!(target_os = "linux") {
-    // //     native_dialog::MessageDialog::new()
-    // //         .set_title("info")
-    // //         .set_type(native_dialog::MessageType::Warning)
-    // //         .set_text("If you're on Wayland, you must set this window to show on top specifically.")
-    // //         .show_alert()
-    // //         .ok();
-    // // }
-
-    // event_loop.run(move |event, _, control_flow| {
-    //     *control_flow = ControlFlow::Wait;
-    //     // println!("{event:?}");
-
-    //     match event {
-    //         Event::LoopDestroyed => {
-    //             println!("Bye!")
-    //         }
-    //         Event::WindowEvent {
-    //             event: WindowEvent::CloseRequested,
-    //             ..
-    //         } => {
-    //             *control_flow = ControlFlow::Exit;
-    //         }
-
-    //         Event::RedrawRequested(_) => {
-    //             let (width, height) = {
-    //                 let size = window.inner_size();
-    //                 (size.width, size.height)
-    //             };
-    //             surface
-    //                 .resize(
-    //                     NonZeroU32::new(width).unwrap(),
-    //                     NonZeroU32::new(height).unwrap(),
-    //                 )
-    //                 .unwrap();
-
-    //             let mut buffer = surface.buffer_mut().unwrap();
-    //             println!("Buffer length: {}", buffer.len());
-    //             println!(
-    //                 "First four buffer bytes: {:b} {:b} {:b} {:b}",
-    //                 buffer[0], buffer[1], buffer[2], buffer[3]
-    //             );
-    //             let color_u32 = RGBA::new(0, 0, 0, 10).to_softbuf_u32();
-    //             buffer.fill(color_u32);
-    //             buffer.present().unwrap();
-    //         }
-
-    //         _ => (),
-    //     }
-    // });
 }
 
 #[cfg(test)]

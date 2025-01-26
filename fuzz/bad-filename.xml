@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<?xml-model href="../shimeji.xsd"?>
+<Shimeji name="default" gravity="true">
+  <Animation name="idle" fps="24">
+    <frame number="1" file="./img/this_file_should_not_exist" />
+  </Animation>
+</Shimeji>

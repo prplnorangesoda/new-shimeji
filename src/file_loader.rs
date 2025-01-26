@@ -7,13 +7,25 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Error;
-use derive_more::derive::{Debug, Display, Error, From};
-use xml::{attribute::OwnedAttribute, name::OwnedName, reader::XmlEvent};
+use anyhow::Context;
+use derive_more::derive::{Debug, Display, Error};
+use xml::reader::XmlEvent;
 
-use crate::{shimeji::ShimejiData, ShimejiConfig};
+use crate::shimeji::ShimejiData;
 
 static VALID_SHIMEJI_ATTRIBUTES: [&str; 2] = ["name", "gravity"];
+
+pub fn create_shimeji_data_from_file_name(
+    file_name: impl Into<OsString>,
+) -> anyhow::Result<ShimejiData> {
+    let file_name: OsString = file_name.into();
+    let file = File::open(file_name).context("file name passed was invalid")?;
+    let parsed = parse_xml_data_for_shimeji_data(file).context("failed to parse XML data")?;
+
+    // we have the data, create animation data in memory for the shimeji
+
+    Ok(ShimejiData { name: parsed.name })
+}
 
 #[derive(Debug)]
 pub struct AnimationXml {
@@ -27,20 +39,6 @@ pub struct FrameXml {
     number: u32,
     file_path: String,
 }
-
-pub fn create_config_from_file_name(
-    file_name: impl Into<OsString>,
-) -> Result<ShimejiConfig, XmlParseError> {
-    let file_name: OsString = file_name.into();
-    let file = File::open(file_name).expect("file to open should exist");
-    let parsed = parse_xml_data_for_shimeji_data(file)?;
-
-    Ok(ShimejiConfig {
-        name: parsed.name,
-        data: Arc::new(ShimejiData {}),
-    })
-}
-
 #[derive(Debug, Error, Display)]
 pub enum XmlParseError {
     MultipleShimeji,
@@ -49,15 +47,14 @@ pub enum XmlParseError {
     MissingAttribute { attribute: &'static str },
     MissingImageFile { file_path: String },
 }
-
 #[derive(Debug)]
 struct XmlReturnData {
-    shimeji_attributes: HashMap<String, String>,
-    animations: Vec<AnimationXml>,
-    name: Arc<str>,
+    pub shimeji_attributes: HashMap<String, String>,
+    pub animations: Vec<AnimationXml>,
+    pub name: Arc<str>,
 }
-fn parse_xml_data_for_shimeji_data(file: impl Read) -> Result<Box<XmlReturnData>, XmlParseError> {
-    let xml_reader = xml::EventReader::new(file);
+fn parse_xml_data_for_shimeji_data<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
+    let xml_reader = xml::EventReader::new(data);
 
     let mut shimeji_found = false;
     let mut shimeji_attributes = None;
@@ -70,15 +67,15 @@ fn parse_xml_data_for_shimeji_data(file: impl Read) -> Result<Box<XmlReturnData>
     let mut animations: Vec<AnimationXml> = Vec::with_capacity(1);
     for xml_event in xml_reader {
         // dbg!(&xml_event);
-        match xml_event {
-            Err(x) => {
-                log::error!("{x}");
-                break;
-            }
-            Ok(XmlEvent::Whitespace(_)) => (),
-            Ok(XmlEvent::StartElement {
+        if let Err(x) = xml_event {
+            log::error!("{x}");
+            break;
+        }
+        match xml_event.unwrap() {
+            XmlEvent::Whitespace(_) => (),
+            XmlEvent::StartElement {
                 name, attributes, ..
-            }) => match name.local_name.as_str() {
+            } => match name.local_name.as_str() {
                 "Shimeji" => {
                     if shimeji_found {
                         return Err(XmlParseError::MultipleShimeji);
@@ -158,10 +155,10 @@ fn parse_xml_data_for_shimeji_data(file: impl Read) -> Result<Box<XmlReturnData>
                     continue;
                 }
             },
-            Ok(XmlEvent::EndDocument) => {
+            XmlEvent::EndDocument => {
                 break;
             }
-            Ok(XmlEvent::EndElement { name }) => match name.local_name.as_str() {
+            XmlEvent::EndElement { name } => match name.local_name.as_str() {
                 "Shimeji" => {}
                 "Animation" => {
                     inside_animation = false;

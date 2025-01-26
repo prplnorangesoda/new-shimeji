@@ -13,10 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 use winit::{
-    dpi::{LogicalPosition, PhysicalPosition, PhysicalSize},
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
-    platform::x11::EventLoopBuilderExtX11,
+    dpi::PhysicalPosition,
     window::{Window, WindowId},
 };
 
@@ -53,13 +50,11 @@ impl Eq for ShimejiBucket {}
 
 #[derive(Debug)]
 pub enum BucketThreadMessage {
-    Add(Window, ShimejiData),
-    Remove(WindowId, ShimejiData),
+    Add(Window, Arc<ShimejiData>),
+    Remove(WindowId),
 }
 
 use BucketThreadMessage::*;
-
-use crate::ShimejiConfig;
 
 impl Drop for ShimejiBucket {
     fn drop(&mut self) {
@@ -73,12 +68,12 @@ struct ShimejiWindow {
     window: Rc<Window>,
     context: Context<Rc<Window>>,
     surface: Surface<Rc<Window>, Rc<Window>>,
-    data: ShimejiData,
+    data: Arc<ShimejiData>,
     last_rendered_frame: Cell<Instant>,
 }
 
 impl ShimejiWindow {
-    pub fn new(window: Window, data: ShimejiData) -> Self {
+    pub fn new(window: Window, data: Arc<ShimejiData>) -> Self {
         let rc = Rc::new(window);
         let context = Context::new(Rc::clone(&rc)).unwrap();
         Self {
@@ -239,7 +234,7 @@ impl ShimejiBucket {
     ///
     /// # Errors
     /// Errors if `!self.is_running` or if `self.sender` == `None`.
-    pub fn add(&mut self, shimeji: ShimejiData, window: Window) -> Result<(), BucketError> {
+    pub fn add(&mut self, shimeji: Arc<ShimejiData>, window: Window) -> Result<(), BucketError> {
         if !self.is_running {
             return Err(BucketError::NotRunning);
         }
@@ -257,5 +252,6 @@ impl ShimejiBucket {
 
 #[derive(Debug, Clone)]
 pub struct ShimejiData {
+    pub name: Arc<str>,
     // frames: Vec<Frame>,
 }
