@@ -1,14 +1,13 @@
 use anyhow::{bail, Context};
 use png::ColorType;
-use std::ffi::OsString;
+use std::{collections::HashMap, ffi::OsString};
 
 use crate::{rgba::Rgba, shimeji::ShimejiData, xml_parser::parse};
 use std::fs;
 
 #[derive(Debug, Clone)]
-pub struct Animation {
-    pub name: String,
-    pub fps: u32,
+pub struct AnimationData {
+    pub fps: f64,
     pub frames: Vec<Frame>,
 }
 #[derive(Debug, Clone)]
@@ -27,9 +26,9 @@ pub fn create_shimeji_data_from_file_name(
 
     // we have the data, create animation data in memory for the shimeji
 
-    let mut decoded_animations: Vec<Animation> = Vec::with_capacity(data.animations.len());
+    let mut decoded_animations = HashMap::with_capacity(data.animations.len());
     for mut animation in data.animations {
-        let fps = animation.fps.unwrap_or(24);
+        let fps = animation.fps.unwrap_or(24.0);
 
         animation.frames.sort_by_key(|f| f.number);
 
@@ -71,11 +70,13 @@ pub fn create_shimeji_data_from_file_name(
                 pixels_row_major: bytes,
             })
         }
-        decoded_animations.push(Animation {
-            name: animation.name,
-            fps,
-            frames: frame_buf,
-        });
+        decoded_animations.insert(
+            animation.name,
+            AnimationData {
+                fps,
+                frames: frame_buf,
+            },
+        );
     }
 
     let ret = ShimejiData {
@@ -84,7 +85,7 @@ pub fn create_shimeji_data_from_file_name(
     };
     log::debug!(
         "{:#?}",
-        ret.animations.first().unwrap().frames.first().unwrap()
+        ret.animations.get("idle").unwrap().frames.first().unwrap()
     );
     Ok(ret)
 }

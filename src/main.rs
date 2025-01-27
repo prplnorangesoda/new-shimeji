@@ -15,6 +15,7 @@ use std::{
 };
 use winit::{
     application::ApplicationHandler,
+    dpi::PhysicalSize,
     error::EventLoopError,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
@@ -71,6 +72,7 @@ cfg_if! {
                 .with_decorations(false)
                 .with_x11_window_type(vec![WindowType::Dock])
                 .with_window_level(WindowLevel::AlwaysOnTop)
+                .with_inner_size(PhysicalSize::new(10, 10))
         });
     } else {
         static WINDOW_ATTRIBS: LazyLock<WindowAttributes> = std::sync::LazyLock::new(|| {
@@ -79,6 +81,7 @@ cfg_if! {
                 .with_transparent(true)
                 .with_decorations(false)
                 .with_window_level(WindowLevel::AlwaysOnTop)
+                .with_inner_size(PhysicalSize::new(10, 10))
         });
     }
 
@@ -108,7 +111,10 @@ impl ApplicationHandler for BucketManager {
             RedrawRequested => {
                 log::debug!("RedrawRequested")
             }
-            _ => {}
+            Resized(size) => {
+                log::debug!("Resized");
+            }
+            _ => (),
         }
     }
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {}

@@ -8,7 +8,7 @@ static VALID_SHIMEJI_ATTRIBUTES: [&str; 2] = ["name", "gravity"];
 #[derive(Debug)]
 pub struct AnimationXml {
     pub name: String,
-    pub fps: Option<u32>,
+    pub fps: Option<f64>,
     pub frames: Vec<FrameXml>,
 }
 
@@ -39,7 +39,7 @@ pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
 
     let mut inside_animation = false;
     let mut animation_name: Option<String> = None;
-    let mut animation_fps: Option<u32> = None;
+    let mut animation_fps: Option<f64> = None;
     let mut animation_frames: Option<Vec<FrameXml>> = None;
 
     let mut animations: Vec<AnimationXml> = Vec::with_capacity(1);
@@ -84,7 +84,7 @@ pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
                             .find(|attr| attr.name.local_name == "fps")
                             .ok_or(XmlParseError::MissingAttribute { attribute: "fps" })?
                             .value
-                            .parse::<u32>()
+                            .parse::<f64>()
                             .map_err(|_| XmlParseError::MalformedFile)?,
                     );
                     animation_name = Some(

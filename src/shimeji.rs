@@ -2,6 +2,7 @@ use derive_more::derive::{Display, Error, From};
 use softbuffer::{Context, Surface};
 use std::{
     cell::Cell,
+    collections::HashMap,
     num::NonZeroU32,
     rc::Rc,
     sync::{
@@ -13,11 +14,11 @@ use std::{
     time::{Duration, Instant},
 };
 use winit::{
-    dpi::PhysicalPosition,
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     window::{Window, WindowId},
 };
 
-use crate::loader::Animation;
+use crate::loader::AnimationData;
 
 use super::rgba::Rgba;
 #[derive(Debug, Error, Display, From)]
@@ -66,31 +67,71 @@ impl Drop for ShimejiBucket {
     }
 }
 
+type RcWindow = Rc<Window>;
 struct ShimejiWindow {
-    window: Rc<Window>,
-    context: Context<Rc<Window>>,
-    surface: Surface<Rc<Window>, Rc<Window>>,
+    window: RcWindow,
+    context: Context<RcWindow>,
+    surface: Surface<RcWindow, RcWindow>,
     data: Arc<ShimejiData>,
-    last_rendered_frame: Cell<Instant>,
+    last_rendered_frame: Instant,
+    current_frame: Option<NonZeroU32>,
 }
 
 impl ShimejiWindow {
     pub fn new(window: Window, data: Arc<ShimejiData>) -> Self {
         let rc = Rc::new(window);
         let context = Context::new(Rc::clone(&rc)).unwrap();
+        rc.set_visible(true);
         Self {
             window: Rc::clone(&rc),
             surface: Surface::new(&context, Rc::clone(&rc)).unwrap(),
             context,
-            last_rendered_frame: Cell::new(Instant::now()),
+            last_rendered_frame: Instant::now(),
             data,
+            current_frame: None,
         }
     }
     pub fn update(&mut self) {
-        // self.event_loop.pump_app_events(Some(Duration::ZERO), self);
-        let (width, height) = {
-            let size = self.window.inner_size();
-            (size.width, size.height)
+        let idle_animation = self.data.animations.get("idle").unwrap();
+        let time_between_frames = Duration::from_secs_f64(1.0 / idle_animation.fps);
+
+        let delta_time = self.last_rendered_frame.elapsed();
+        log::trace!("delta_time: {delta_time:?}, time_between_frames: {time_between_frames:?}");
+        if delta_time < time_between_frames {
+            return;
+        } // passed frame cap, time to render
+        log::debug!("delta_time check passed");
+
+        let frame_index: usize = self
+            .current_frame
+            .unwrap_or(unsafe { NonZeroU32::new_unchecked(1) })
+            .get()
+            .try_into()
+            .unwrap();
+
+        let mut frame_index = frame_index + 1;
+        self.current_frame = Some(NonZeroU32::new(frame_index.try_into().unwrap()).unwrap());
+
+        let zero_indexed_frame_index = frame_index - 1;
+        if idle_animation
+            .frames
+            .get(zero_indexed_frame_index)
+            .is_none()
+        {
+            self.current_frame = Some(unsafe { NonZeroU32::new_unchecked(1) });
+            frame_index = 1;
+        }
+        log::debug!("frame_index: {frame_index}");
+
+        let zero_indexed_frame_index = frame_index - 1;
+        let frame = &idle_animation.frames[zero_indexed_frame_index];
+
+        let (width, height) = (frame.width, frame.height);
+        match self
+            .window
+            .request_inner_size(PhysicalSize::new(width, height))
+        {
+            _ => (),
         };
         self.surface
             .resize(
@@ -105,8 +146,13 @@ impl ShimejiWindow {
         //     "First four buffer bytes: {:b} {:b} {:b} {:b}",
         //     buffer[0], buffer[1], buffer[2], buffer[3]
         // );
-        let color_u32 = Rgba::new(0, 50, 0, 10).to_softbuf_u32();
-        buffer.fill(color_u32);
+        for (index, value) in frame.pixels_row_major.iter().enumerate() {
+            buffer[index] = value.to_softbuf_u32();
+        }
+        if !self.window.is_visible().unwrap() {
+            self.window.set_visible(true);
+        }
+        self.last_rendered_frame = Instant::now();
         buffer.present().unwrap();
     }
 }
@@ -139,8 +185,8 @@ fn loop_for_shimeji_execution(
                         log::debug!("monitor size: {size:?}");
                         log::debug!("window position: {position:?}");
                         window.set_outer_position(PhysicalPosition::new(
-                            0,
-                            size.height - window.inner_size().height,
+                            0, // size.height - window.inner_size().height,
+                            500,
                         ));
                     }
                     None => {
@@ -180,7 +226,7 @@ fn loop_for_shimeji_execution(
             }
             for shimeji in inner_vec.iter_mut() {
                 shimeji.update();
-                thread::sleep(Duration::from_millis(100))
+                thread::yield_now();
             }
         }
     }
@@ -251,5 +297,5 @@ impl ShimejiBucket {
 #[derive(Debug, Clone)]
 pub struct ShimejiData {
     pub name: Arc<str>,
-    pub animations: Vec<Animation>,
+    pub animations: HashMap<String, AnimationData>,
 }

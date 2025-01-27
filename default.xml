@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <?xml-model href="shimeji.xsd"?>
 <Shimeji name="default" gravity="true">
-  <Animation name="idle" fps="24">
+  <Animation name="idle" fps="2">
     <frame number="1" file="./img/idle_001.png" />
     <frame number="2" file="./img/idle_002.png" />
     <frame number="3" file="./img/idle_003.png" />
 
   </Animation>
-  <Animation name="idle2" fps="24">
+  <Animation name="idle2" fps="2">
     <frame number="1" file="./img/idle2_001.png" />
     <frame number="2" file="./img/idle2_002.png" />
     <frame number="3" file="./img/idle2_003.png" />
