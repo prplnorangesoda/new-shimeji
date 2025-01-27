@@ -17,6 +17,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
+use crate::loader::Animation;
+
 use super::rgba::Rgba;
 #[derive(Debug, Error, Display, From)]
 pub enum BucketError {
@@ -127,11 +129,7 @@ fn loop_for_shimeji_execution(
         };
         match recv {
             Add(window, data) => {
-                log::debug!(
-                    "Received initial window: {0:?}, data: {1:?}",
-                    &window,
-                    &data
-                );
+                log::debug!("Received initial window: {0:?}", &window,);
                 let monitor = window.current_monitor();
                 match monitor {
                     Some(monitor) => {
@@ -170,7 +168,7 @@ fn loop_for_shimeji_execution(
             if let Some(val) = val {
                 match val {
                     Add(window, data) => {
-                        log::debug!("Received window: {0:?}, data: {1:?}", &window, &data);
+                        log::debug!("Received window: {0:?}", &window);
                         inner_vec.push(ShimejiWindow::new(window, data))
                     }
                     Remove(..) => todo!(),
@@ -253,5 +251,5 @@ impl ShimejiBucket {
 #[derive(Debug, Clone)]
 pub struct ShimejiData {
     pub name: Arc<str>,
-    // frames: Vec<Frame>,
+    pub animations: Vec<Animation>,
 }

@@ -21,9 +21,10 @@ use winit::{
     window::{WindowAttributes, WindowId, WindowLevel},
 };
 
-mod file_loader;
+mod loader;
 mod rgba;
 mod shimeji;
+mod xml_parser;
 use shimeji::{BucketError, ShimejiBucket, ShimejiData};
 
 use derive_more::{derive::From, Display, Error};
@@ -215,7 +216,7 @@ fn main() -> anyhow::Result<()> {
     let mut manager = BucketManager::new(parallelism);
     let file_name =
         std::env::var_os("SHIMEJI_CONFIG_FILE").unwrap_or(OsString::from("./default.xml"));
-    let config = file_loader::create_shimeji_data_from_file_name(file_name)?;
+    let config = loader::create_shimeji_data_from_file_name(file_name)?;
     let config = Arc::new(config);
 
     for _ in 0..1 {

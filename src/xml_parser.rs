@@ -1,43 +1,21 @@
-use std::{
-    borrow::BorrowMut,
-    collections::HashMap,
-    ffi::OsString,
-    fs::{self, File},
-    io::Read,
-    sync::Arc,
-};
+use std::{borrow::BorrowMut, collections::HashMap, fs, io::Read, sync::Arc};
 
-use anyhow::Context;
 use derive_more::derive::{Debug, Display, Error};
 use xml::reader::XmlEvent;
 
-use crate::shimeji::ShimejiData;
-
 static VALID_SHIMEJI_ATTRIBUTES: [&str; 2] = ["name", "gravity"];
-
-pub fn create_shimeji_data_from_file_name(
-    file_name: impl Into<OsString>,
-) -> anyhow::Result<ShimejiData> {
-    let file_name: OsString = file_name.into();
-    let file = File::open(file_name).context("file name passed was invalid")?;
-    let parsed = parse_xml_data_for_shimeji_data(file).context("failed to parse XML data")?;
-
-    // we have the data, create animation data in memory for the shimeji
-
-    Ok(ShimejiData { name: parsed.name })
-}
 
 #[derive(Debug)]
 pub struct AnimationXml {
-    name: String,
-    fps: Option<u32>,
-    frames: Vec<FrameXml>,
+    pub name: String,
+    pub fps: Option<u32>,
+    pub frames: Vec<FrameXml>,
 }
 
 #[derive(Debug)]
 pub struct FrameXml {
-    number: u32,
-    file_path: String,
+    pub number: u32,
+    pub file_path: String,
 }
 #[derive(Debug, Error, Display)]
 pub enum XmlParseError {
@@ -48,12 +26,12 @@ pub enum XmlParseError {
     MissingImageFile { file_path: String },
 }
 #[derive(Debug)]
-struct XmlReturnData {
+pub struct XmlReturnData {
     pub shimeji_attributes: HashMap<String, String>,
     pub animations: Vec<AnimationXml>,
     pub name: Arc<str>,
 }
-fn parse_xml_data_for_shimeji_data<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
+pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
     let xml_reader = xml::EventReader::new(data);
 
     let mut shimeji_found = false;
