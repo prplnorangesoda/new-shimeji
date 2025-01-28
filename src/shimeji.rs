@@ -1,5 +1,6 @@
+use anyhow::Context;
 use derive_more::derive::{Display, Error, From};
-use softbuffer::{Context, Surface};
+use pixels::{Pixels, SurfaceTexture};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -54,6 +55,10 @@ impl Eq for ShimejiBucket {}
 #[derive(Debug)]
 pub enum BucketThreadMessage {
     Add(Window, Arc<ShimejiData>),
+    Resized {
+        id: WindowId,
+        size: PhysicalSize<u32>,
+    },
     Remove(WindowId),
 }
 
@@ -67,27 +72,34 @@ impl Drop for ShimejiBucket {
     }
 }
 
-type RcWindow = Rc<Window>;
-struct ShimejiWindow {
-    window: RcWindow,
-    context: Context<RcWindow>,
-    surface: Surface<RcWindow, RcWindow>,
+struct ShimejiWindow<'a> {
+    window: Arc<Window>,
+    pixels: Pixels<'a>,
     data: Arc<ShimejiData>,
     last_rendered_frame: Instant,
     current_frame: Option<NonZeroU32>,
 }
 
-impl ShimejiWindow {
+impl ShimejiWindow<'_> {
     pub fn new(window: Window, data: Arc<ShimejiData>) -> Self {
-        let rc = Rc::new(window);
-        let context = Context::new(Rc::clone(&rc)).unwrap();
+        let shimeji_width = data.width;
+        let shimeji_height = data.height;
+        let rc = Arc::new(window);
+        let mut pixels = {
+            let window_size = rc.inner_size();
+            let surface_texture =
+                SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&rc));
+            Pixels::new(shimeji_width, shimeji_height, surface_texture).unwrap()
+        };
+        let _ = rc.request_inner_size(LogicalSize::new(shimeji_width, shimeji_height));
         rc.set_visible(true);
+        pixels.clear_color(pixels::wgpu::Color::TRANSPARENT);
+
         Self {
-            window: Rc::clone(&rc),
-            surface: Surface::new(&context, Rc::clone(&rc)).unwrap(),
-            context,
+            window: rc,
             last_rendered_frame: Instant::now(),
             data,
+            pixels,
             current_frame: None,
         }
     }
@@ -125,35 +137,25 @@ impl ShimejiWindow {
 
         let zero_indexed_frame_index = frame_index - 1;
         let frame = &idle_animation.frames[zero_indexed_frame_index];
-
-        let (width, height) = (frame.width, frame.height);
-        match self
-            .window
-            .request_inner_size(PhysicalSize::new(width, height))
         {
-            _ => (),
-        };
-        self.surface
-            .resize(
-                NonZeroU32::new(width).unwrap(),
-                NonZeroU32::new(height).unwrap(),
-            )
-            .unwrap();
-
-        let mut buffer = self.surface.buffer_mut().unwrap();
-        // println!("Buffer length: {}", buffer.len());
-        // println!(
-        //     "First four buffer bytes: {:b} {:b} {:b} {:b}",
-        //     buffer[0], buffer[1], buffer[2], buffer[3]
-        // );
-        for (index, value) in frame.pixels_row_major.iter().enumerate() {
-            buffer[index] = value.to_softbuf_u32();
+            let buffer = self.pixels.frame_mut();
+            for (color, pixel) in frame
+                .pixels_row_major
+                .iter()
+                .zip(buffer.chunks_exact_mut(4))
+            {
+                let slice = [color.red, color.green, color.blue, color.alpha];
+                pixel.copy_from_slice(&slice);
+                //     buffer[index] = value.to_softbuf_u32();
+            }
         }
+
+        let _ = self.pixels.render();
         if !self.window.is_visible().unwrap() {
             self.window.set_visible(true);
         }
         self.last_rendered_frame = Instant::now();
-        buffer.present().unwrap();
+        // buffer.present().unwrap();
     }
 }
 
@@ -218,6 +220,13 @@ fn loop_for_shimeji_execution(
                         inner_vec.push(ShimejiWindow::new(window, data))
                     }
                     Remove(..) => todo!(),
+                    Resized { id, size } => {
+                        let shimeji = inner_vec
+                            .iter_mut()
+                            .find(|shimeji| (**shimeji).window.id() == id)
+                            .expect("resized ID should be valid");
+                        let _ = shimeji.pixels.resize_surface(size.width, size.height);
+                    }
                 }
             }
             if inner_vec.is_empty() {
@@ -289,6 +298,21 @@ impl ShimejiBucket {
             .unwrap();
         Ok(())
     }
+    pub fn was_resized(
+        &mut self,
+        id: WindowId,
+        size: PhysicalSize<u32>,
+    ) -> Result<(), BucketError> {
+        if !self.is_running {
+            return Err(BucketError::NotRunning);
+        }
+        let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
+        sender
+            .send(BucketThreadMessage::Resized { id, size })
+            .context("should be able to send resized message")
+            .unwrap();
+        Ok(())
+    }
     pub fn contained_shimejis(&self) -> usize {
         self.currently_responsible_shimejis
     }
@@ -297,5 +321,7 @@ impl ShimejiBucket {
 #[derive(Debug, Clone)]
 pub struct ShimejiData {
     pub name: Arc<str>,
+    pub height: u32,
+    pub width: u32,
     pub animations: HashMap<String, AnimationData>,
 }

@@ -99,7 +99,7 @@ impl ApplicationHandler for BucketManager {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
         use WindowEvent::*;
@@ -109,11 +109,23 @@ impl ApplicationHandler for BucketManager {
         log::trace!("WindowEvent: {event:?}");
         match event {
             RedrawRequested => {
-                log::debug!("RedrawRequested")
+                log::trace!("WindowEvent: RedrawRequested")
             }
             Resized(size) => {
-                log::debug!("Resized");
+                log::trace!("WindowEvent: Resized");
+                let bucket: &RefCell<ShimejiBucket> =
+                    Rc::deref(self.buckets_windows_map.get(&window_id).unwrap());
+                bucket
+                    .borrow_mut()
+                    .was_resized(window_id, size)
+                    .context("could not resize window on resize event received")
+                    .unwrap();
             }
+            MouseInput {
+                device_id,
+                state,
+                button,
+            } => {}
             _ => (),
         }
     }
@@ -204,7 +216,7 @@ impl BucketManager {
 }
 fn main() -> anyhow::Result<()> {
     simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Debug)
+        .with_level(log::LevelFilter::Info)
         .env()
         .init()
         .expect("Should be able to set up logger");

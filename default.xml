@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <?xml-model href="shimeji.xsd"?>
-<Shimeji name="default" gravity="true">
+<Shimeji name="default" width="32" height="32" gravity="true">
   <Animation name="idle" fps="2">
     <frame number="1" file="./img/idle_001.png" />
     <frame number="2" file="./img/idle_002.png" />

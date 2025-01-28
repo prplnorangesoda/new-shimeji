@@ -54,24 +54,24 @@ impl Rgba {
         if self.alpha == 0 {
             return 0;
         }
-        // println!("self.alpha as f32: {}", self.alpha as f32);
-        let alpha = self.alpha as f32 / 255.0;
-        let red = (self.red as f32 * alpha).floor() as u32;
-        let blue = (self.blue as f32 * alpha).floor() as u32;
-        let green = (self.green as f32 * alpha).floor() as u32;
-        // println!("red: {}", red);
-        // println!("green: {}", green);
-        // println!("blue: {}", blue);
-        // println!("alpha: {}", alpha);
+        // // println!("self.alpha as f32: {}", self.alpha as f32);
+        // let alpha = self.alpha as f32 / 255.0;
+        // let red = (self.red as f32 * alpha).floor() as u32;
+        // let blue = (self.blue as f32 * alpha).floor() as u32;
+        // let green = (self.green as f32 * alpha).floor() as u32;
+        // // println!("red: {}", red);
+        // // println!("green: {}", green);
+        // // println!("blue: {}", blue);
+        // // println!("alpha: {}", alpha);
 
-        let ret = (red << 16) | (blue << 8) | green;
+        // let ret = (red << 16) | (blue << 8) | green;
 
-        // println!("ret: {:#034b}", ret);
-        ret
+        // // println!("ret: {:#034b}", ret);
+        // ret
 
-        // (self.alpha as u32) << 24
-        //     | (self.red as u32) << 16
-        //     | (self.green as u32) << 8
-        //     | self.blue as u32
+        (self.alpha as u32) << 24
+            | (self.red as u32) << 16
+            | (self.green as u32) << 8
+            | self.blue as u32
     }
 }

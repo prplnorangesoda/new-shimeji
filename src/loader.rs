@@ -12,8 +12,6 @@ pub struct AnimationData {
 }
 #[derive(Debug, Clone)]
 pub struct Frame {
-    pub width: u32,
-    pub height: u32,
     pub pixels_row_major: Box<[Rgba]>,
 }
 
@@ -27,6 +25,8 @@ pub fn create_shimeji_data_from_file_name(
     // we have the data, create animation data in memory for the shimeji
 
     let mut decoded_animations = HashMap::with_capacity(data.animations.len());
+    let width = data.shimeji_width;
+    let height = data.shimeji_height;
     for mut animation in data.animations {
         let fps = animation.fps.unwrap_or(24.0);
 
@@ -65,8 +65,6 @@ pub fn create_shimeji_data_from_file_name(
             }
             let bytes: Box<[Rgba]> = rgba_vec.into_boxed_slice();
             frame_buf.push(Frame {
-                width: info.width,
-                height: info.height,
                 pixels_row_major: bytes,
             })
         }
@@ -82,10 +80,12 @@ pub fn create_shimeji_data_from_file_name(
     let ret = ShimejiData {
         name: data.name,
         animations: decoded_animations,
+        height,
+        width,
     };
-    log::debug!(
-        "{:#?}",
-        ret.animations.get("idle").unwrap().frames.first().unwrap()
-    );
+    // log::debug!(
+    //     "{:#?}",
+    //     ret.animations.get("idle").unwrap().frames.first().unwrap()
+    // );
     Ok(ret)
 }

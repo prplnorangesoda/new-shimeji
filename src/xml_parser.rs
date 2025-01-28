@@ -30,6 +30,8 @@ pub struct XmlReturnData {
     pub shimeji_attributes: HashMap<String, String>,
     pub animations: Vec<AnimationXml>,
     pub name: Arc<str>,
+    pub shimeji_height: u32,
+    pub shimeji_width: u32,
 }
 pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
     let xml_reader = xml::EventReader::new(data);
@@ -166,8 +168,22 @@ pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
         .remove("name")
         .ok_or(XmlParseError::MissingAttribute { attribute: "name" })?;
 
+    let height = shimeji_attributes
+        .remove("height")
+        .ok_or(XmlParseError::MissingAttribute {
+            attribute: "height",
+        })?
+        .parse()
+        .map_err(|_| XmlParseError::MalformedFile)?;
+    let width = shimeji_attributes
+        .remove("width")
+        .ok_or(XmlParseError::MissingAttribute { attribute: "width" })?
+        .parse()
+        .map_err(|_| XmlParseError::MalformedFile)?;
     let ret = Box::new(XmlReturnData {
         name: Arc::from(name.as_str()),
+        shimeji_height: height,
+        shimeji_width: width,
         animations,
         shimeji_attributes,
     });
