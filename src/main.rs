@@ -93,7 +93,7 @@ impl ApplicationHandler for BucketManager {
 
         self.address_pending_shimejis(event_loop);
     }
-    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         log::debug!("Exiting");
     }
     fn window_event(
@@ -122,9 +122,9 @@ impl ApplicationHandler for BucketManager {
                     .unwrap();
             }
             MouseInput {
-                device_id,
-                state,
-                button,
+                device_id: _,
+                state: _,
+                button: _,
             } => {}
             _ => (),
         }
@@ -154,6 +154,7 @@ impl BucketManager {
     pub fn add_shimeji(&mut self, pending: Arc<ShimejiData>) {
         self.pending_shimejis.push(pending)
     }
+    #[cfg(not(target_os = "windows"))]
     pub fn run(mut self, tray_handle: Option<tray_item::TrayItem>) -> Result<(), ManagerError> {
         let copy = Arc::clone(&self.should_exit);
         if let Some(mut handle) = tray_handle {
@@ -175,6 +176,50 @@ impl BucketManager {
         log::debug!("Manager returned");
         Ok(())
     }
+    #[cfg(target_os = "windows")]
+    pub fn run(mut self, tray_handle: Option<()>) -> Result<(), ManagerError> {
+        let copy = Arc::clone(&self.should_exit);
+        // if let Some(mut handle) = tray_handle {
+        //     handle
+        //         .add_menu_item("Kill", move || {
+        //             copy.store(true, std::sync::atomic::Ordering::SeqCst);
+        //         })
+        //         .unwrap();
+        // }
+
+        cfg_if! {
+            if #[cfg(target_os = "linux")] {
+                let event_loop = EventLoop::builder().with_x11().build().unwrap();
+            } else {
+                let event_loop = EventLoop::new().unwrap();
+            }
+        }
+        event_loop.run_app(&mut self)?;
+        log::debug!("Manager returned");
+        Ok(())
+    }
+
+    // pub fn run(mut self, tray_handle: Option<tray_item::TrayItem>) -> Result<(), ManagerError> {
+    //     let copy = Arc::clone(&self.should_exit);
+    //     if let Some(mut handle) = tray_handle {
+    //         handle
+    //             .add_menu_item("Kill", move || {
+    //                 copy.store(true, std::sync::atomic::Ordering::SeqCst);
+    //             })
+    //             .unwrap();
+    //     }
+
+    //     cfg_if! {
+    //         if #[cfg(target_os = "linux")] {
+    //             let event_loop = EventLoop::builder().with_x11().build().unwrap();
+    //         } else {
+    //             let event_loop = EventLoop::new().unwrap();
+    //         }
+    //     }
+    //     event_loop.run_app(&mut self)?;
+    //     log::debug!("Manager returned");
+    //     Ok(())
+    // }
 
     fn address_pending_shimejis(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         // If we don't collect here, the compiler
@@ -227,9 +272,16 @@ fn main() -> anyhow::Result<()> {
         .get();
     log::debug!("Available parallelism: {}", parallelism);
 
-    let icon_red = tray_item::IconSource::Resource("/home/lucy/tray_icon-red.png");
+    cfg_if! {
+        if #[cfg(not(target_os = "windows"))] {
+            let icon_red = tray_item::IconSource::Resource("/home/lucy/tray_icon-red.png");
+            let tray_handle = tray_item::TrayItem::new("Example", icon_red).ok();
 
-    let tray_handle = tray_item::TrayItem::new("Example", icon_red).ok();
+        } else {
+            let tray_handle = None;
+        }
+    }
+
     log::debug!("Running manager");
     let mut manager = BucketManager::new(parallelism);
     let file_name =

@@ -5,7 +5,6 @@
 
 [dependencies]
   derive_more   = { version = "1.0.0", features = ["full"] }
-  tray-item     = { version = "0.10.0", features = ["ksni"] }
   anyhow        = "1.0.93"
   log           = "0.4.22"
   png           = "0.17"
@@ -15,3 +14,6 @@
   xml           = "0.8.20"
   cfg-if        = "1.0.0"
   pixels        = "0.15.0"
+
+[target.'cfg(not(windows))'.dependencies]
+  tray-item = { version = "0.10.0", features = ["ksni"] }
