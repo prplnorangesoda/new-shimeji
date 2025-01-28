@@ -23,11 +23,15 @@ use winit::{
     window::{WindowAttributes, WindowId, WindowLevel},
 };
 
+mod bucket;
 mod loader;
 mod rgba;
+#[path = "./off_thread/shimeji.rs"]
 mod shimeji;
 mod xml_parser;
-use shimeji::{BucketError, ShimejiBucket, ShimejiData};
+
+use bucket::{BucketError, ShimejiBucket};
+use shimeji::ShimejiData;
 
 use derive_more::{derive::From, Display, Error};
 

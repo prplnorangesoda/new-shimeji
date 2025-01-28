@@ -1,75 +1,23 @@
-use anyhow::Context;
-use derive_more::derive::{Display, Error, From};
-use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
+use pixels::Pixels;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver},
         Arc,
     },
-    thread::{self, JoinHandle},
+    thread::{self},
     time::{Duration, Instant},
 };
 use winit::{
-    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+    dpi::{LogicalSize, PhysicalPosition},
     raw_window_handle::HasWindowHandle,
-    window::{Window, WindowId},
+    window::Window,
 };
 
-use crate::loader::AnimationData;
-
-#[derive(Debug, Error, Display, From)]
-pub enum BucketError {
-    DoubleInit,
-    NotRunning,
-    Io(std::io::Error),
-}
-
-/// A bucket of Shimejis, for one thread.
-///
-/// It will manage its own thread, and have a set of shimejis
-/// that its thread should manage.
-/// Note that it will live on the main thread, but it maintains a
-/// channel to send messages to its inner contained thread
-#[derive(Debug)]
-pub struct ShimejiBucket {
-    pub id: usize,
-    is_running: bool,
-    thread: Option<JoinHandle<()>>,
-    should_exit: Arc<AtomicBool>,
-    currently_responsible_shimejis: usize,
-    sender: Option<Sender<BucketThreadMessage>>,
-}
-
-impl PartialEq for ShimejiBucket {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-impl Eq for ShimejiBucket {}
-
-#[derive(Debug)]
-pub enum BucketThreadMessage {
-    Add(Window, Arc<ShimejiData>),
-    Resized {
-        id: WindowId,
-        size: PhysicalSize<u32>,
-    },
-    Remove(WindowId),
-}
-
+use crate::{bucket::BucketThreadMessage, loader::AnimationData};
 use BucketThreadMessage::*;
-
-impl Drop for ShimejiBucket {
-    fn drop(&mut self) {
-        log::debug!("Dropping bucket id {}", self.id);
-        self.should_exit.store(true, Ordering::Release);
-        self.join_thread().ok();
-    }
-}
-
 /// All associated functions run on the inner thread.
 ///
 /// ShimejiWindow is only used in the worker function passed to the spawned thread.
@@ -81,35 +29,25 @@ struct ShimejiWindow<'a> {
     current_frame: Option<NonZeroU32>,
 }
 
-impl ShimejiWindow<'_> {
-    pub fn new(window: Window, data: Arc<ShimejiData>) -> Self {
-        if let Err(why) = window.window_handle() {
-            log::error!("{why}");
-            panic!();
-        }
+impl<'a> ShimejiWindow<'a> {
+    pub fn new(arc_window: Arc<Window>, mut pixels: Pixels<'a>, data: Arc<ShimejiData>) -> Self {
         let shimeji_width = data.width;
         let shimeji_height = data.height;
-        let rc = Arc::new(window);
-        let mut pixels = {
-            let window_size = rc.inner_size();
-            let surface_texture =
-                SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&rc));
-            PixelsBuilder::new(shimeji_width, shimeji_height, surface_texture)
-                .build()
-                .unwrap()
-        };
-        let _ = rc.request_inner_size(LogicalSize::new(shimeji_width, shimeji_height));
-        rc.set_visible(true);
+        let _ = arc_window.request_inner_size(LogicalSize::new(shimeji_width, shimeji_height));
+        arc_window.set_visible(true);
         pixels.clear_color(pixels::wgpu::Color::TRANSPARENT);
 
         Self {
-            window: rc,
+            window: arc_window,
             last_rendered_frame: Instant::now(),
             data,
             pixels,
             current_frame: None,
         }
     }
+}
+
+impl ShimejiWindow<'_> {
     pub fn update(&mut self) {
         let idle_animation = self.data.animations.get("idle").unwrap();
         let time_between_frames = Duration::from_secs_f64(1.0 / idle_animation.fps);
@@ -168,10 +106,10 @@ impl ShimejiWindow<'_> {
 
 /// The thread is started, we are executing.
 #[inline]
-fn loop_for_shimeji_execution(
+pub fn loop_for_shimeji_execution(
     receiver: Receiver<BucketThreadMessage>,
     should_exit: Arc<AtomicBool>,
-) {
+) -> () {
     'running: while !should_exit.load(Ordering::Relaxed) {
         let mut inner_vec = vec![];
         let recv = receiver.recv();
@@ -183,7 +121,7 @@ fn loop_for_shimeji_execution(
             }
         };
         match recv {
-            Add(window, data) => {
+            Add(window, pixels, data) => {
                 log::debug!("Received initial window: {0:?}", &window,);
                 let monitor = window.current_monitor();
                 match monitor {
@@ -203,7 +141,7 @@ fn loop_for_shimeji_execution(
                         window.set_outer_position(PhysicalPosition::new(0, 0));
                     }
                 }
-                inner_vec.push(ShimejiWindow::new(window, data))
+                inner_vec.push(ShimejiWindow::new(window, pixels, data))
             }
             _ => unimplemented!(),
         };
@@ -222,9 +160,9 @@ fn loop_for_shimeji_execution(
 
             if let Some(val) = val {
                 match val {
-                    Add(window, data) => {
+                    Add(window, pixels, data) => {
                         log::debug!("Received window: {0:?}", &window);
-                        inner_vec.push(ShimejiWindow::new(window, data))
+                        inner_vec.push(ShimejiWindow::new(window, pixels, data))
                     }
                     Remove(..) => todo!(),
                     Resized { id, size } => {
@@ -245,85 +183,6 @@ fn loop_for_shimeji_execution(
                 thread::yield_now();
             }
         }
-    }
-}
-impl ShimejiBucket {
-    pub fn is_running(&self) -> bool {
-        self.is_running
-    }
-    pub fn new(id: usize, should_exit: Arc<AtomicBool>) -> Self {
-        ShimejiBucket {
-            id,
-            is_running: false,
-            thread: None,
-            should_exit,
-            currently_responsible_shimejis: 0,
-            sender: None,
-        }
-    }
-    pub fn init(&mut self) -> Result<(), BucketError> {
-        if self.is_running {
-            return Err(BucketError::DoubleInit);
-        }
-        let should_exit = self.should_exit.clone();
-        log::trace!("Initting bucket id: {}", &self.id);
-        let (sender, receiver) = mpsc::channel();
-        let thread = thread::Builder::new()
-            .name(format!("Bucket {} thread", &self.id))
-            .spawn(move || {
-                loop_for_shimeji_execution(receiver, should_exit);
-            })?;
-        self.sender = Some(sender.clone());
-        self.thread = Some(thread);
-        self.is_running = true;
-        Ok(())
-    }
-    pub fn join_thread(&mut self) -> Result<(), BucketError> {
-        if !self.is_running || self.thread.is_none() {
-            return Ok(());
-        }
-        // drop sender, ensuring any in progress recvs are stopped
-        drop(self.sender.take());
-        match self.thread.take().unwrap().join() {
-            Ok(_) => log::debug!("Thread joined successfully on id {}", self.id),
-            Err(huh) => log::error!("THREAD JOIN ERROR on id {}: {huh:?}", self.id),
-        };
-        self.is_running = false;
-        Ok(())
-    }
-    ///
-    /// # Errors
-    /// Errors if `!self.is_running` or if `self.sender` == `None`.
-    pub fn add(&mut self, shimeji: Arc<ShimejiData>, window: Window) -> Result<(), BucketError> {
-        if !self.is_running {
-            return Err(BucketError::NotRunning);
-        }
-        self.currently_responsible_shimejis += 1;
-        let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
-
-        assert!(window.window_handle().is_ok());
-        sender
-            .send(BucketThreadMessage::Add(window, shimeji))
-            .unwrap();
-        Ok(())
-    }
-    pub fn was_resized(
-        &mut self,
-        id: WindowId,
-        size: PhysicalSize<u32>,
-    ) -> Result<(), BucketError> {
-        if !self.is_running {
-            return Err(BucketError::NotRunning);
-        }
-        let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
-        sender
-            .send(BucketThreadMessage::Resized { id, size })
-            .context("should be able to send resized message")
-            .unwrap();
-        Ok(())
-    }
-    pub fn contained_shimejis(&self) -> usize {
-        self.currently_responsible_shimejis
     }
 }
 
