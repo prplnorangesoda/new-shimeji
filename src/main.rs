@@ -19,6 +19,7 @@ use winit::{
     error::EventLoopError,
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoop},
+    raw_window_handle::HasWindowHandle,
     window::{WindowAttributes, WindowId, WindowLevel},
 };
 
@@ -155,7 +156,10 @@ impl BucketManager {
         self.pending_shimejis.push(pending)
     }
     #[cfg(not(target_os = "windows"))]
-    pub fn run(mut self, tray_handle: Option<tray_item::TrayItem>) -> Result<(), ManagerError> {
+    pub fn run_with_tray_handle(
+        self,
+        tray_handle: Option<tray_item::TrayItem>,
+    ) -> Result<(), ManagerError> {
         let copy = Arc::clone(&self.should_exit);
         if let Some(mut handle) = tray_handle {
             handle
@@ -164,29 +168,9 @@ impl BucketManager {
                 })
                 .unwrap();
         }
-
-        cfg_if! {
-            if #[cfg(target_os = "linux")] {
-                let event_loop = EventLoop::builder().with_x11().build().unwrap();
-            } else {
-                let event_loop = EventLoop::new().unwrap();
-            }
-        }
-        event_loop.run_app(&mut self)?;
-        log::debug!("Manager returned");
-        Ok(())
+        self.run()
     }
-    #[cfg(target_os = "windows")]
-    pub fn run(mut self, tray_handle: Option<()>) -> Result<(), ManagerError> {
-        let copy = Arc::clone(&self.should_exit);
-        // if let Some(mut handle) = tray_handle {
-        //     handle
-        //         .add_menu_item("Kill", move || {
-        //             copy.store(true, std::sync::atomic::Ordering::SeqCst);
-        //         })
-        //         .unwrap();
-        // }
-
+    pub fn run(mut self) -> Result<(), ManagerError> {
         cfg_if! {
             if #[cfg(target_os = "linux")] {
                 let event_loop = EventLoop::builder().with_x11().build().unwrap();
@@ -247,11 +231,16 @@ impl BucketManager {
                 .create_window(WINDOW_ATTRIBS.clone())
                 .expect("should be able to create window for shimeji");
 
+            window
+                .window_handle()
+                .expect("window handloe should be able to be grabbed");
+
             let id = window.id();
 
             let bucket_rc = &buckets[index];
-            let mut bucket_to_add_to = Rc::deref(bucket_rc).borrow_mut();
+            let bucket_to_add_to: &RefCell<ShimejiBucket> = Rc::deref(bucket_rc);
             bucket_to_add_to
+                .borrow_mut()
                 .add(pending_shimeji, window)
                 .expect("should be able to add shimeji to bucket");
             let clone = Rc::clone(bucket_rc);
@@ -278,7 +267,7 @@ fn main() -> anyhow::Result<()> {
             let tray_handle = tray_item::TrayItem::new("Example", icon_red).ok();
 
         } else {
-            let tray_handle = None;
+            // let tray_handle: Option<()> = None;
         }
     }
 
@@ -293,7 +282,13 @@ fn main() -> anyhow::Result<()> {
         manager.add_shimeji(config.clone());
     }
     manager.add_shimeji(config);
-    manager.run(tray_handle)?;
+    cfg_if! {
+        if #[cfg(not(target_os = "windows"))] {
+            manager.run_with_tray_handle(tray_handle)?;
+        } else {
+            manager.run()?;
+        }
+    }
     log::debug!("At the end");
     Ok(())
 }

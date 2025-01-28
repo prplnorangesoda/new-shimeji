@@ -1,11 +1,9 @@
 use anyhow::Context;
 use derive_more::derive::{Display, Error, From};
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use std::{
-    cell::Cell,
     collections::HashMap,
     num::NonZeroU32,
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -16,12 +14,12 @@ use std::{
 };
 use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+    raw_window_handle::HasWindowHandle,
     window::{Window, WindowId},
 };
 
 use crate::loader::AnimationData;
 
-use super::rgba::Rgba;
 #[derive(Debug, Error, Display, From)]
 pub enum BucketError {
     DoubleInit,
@@ -72,6 +70,9 @@ impl Drop for ShimejiBucket {
     }
 }
 
+/// All associated functions run on the inner thread.
+///
+/// ShimejiWindow is only used in the worker function passed to the spawned thread.
 struct ShimejiWindow<'a> {
     window: Arc<Window>,
     pixels: Pixels<'a>,
@@ -82,6 +83,10 @@ struct ShimejiWindow<'a> {
 
 impl ShimejiWindow<'_> {
     pub fn new(window: Window, data: Arc<ShimejiData>) -> Self {
+        if let Err(why) = window.window_handle() {
+            log::error!("{why}");
+            panic!();
+        }
         let shimeji_width = data.width;
         let shimeji_height = data.height;
         let rc = Arc::new(window);
@@ -89,7 +94,9 @@ impl ShimejiWindow<'_> {
             let window_size = rc.inner_size();
             let surface_texture =
                 SurfaceTexture::new(window_size.width, window_size.height, Arc::clone(&rc));
-            Pixels::new(shimeji_width, shimeji_height, surface_texture).unwrap()
+            PixelsBuilder::new(shimeji_width, shimeji_height, surface_texture)
+                .build()
+                .unwrap()
         };
         let _ = rc.request_inner_size(LogicalSize::new(shimeji_width, shimeji_height));
         rc.set_visible(true);
@@ -293,6 +300,8 @@ impl ShimejiBucket {
         }
         self.currently_responsible_shimejis += 1;
         let sender = self.sender.as_ref().ok_or(BucketError::NotRunning)?;
+
+        assert!(window.window_handle().is_ok());
         sender
             .send(BucketThreadMessage::Add(window, shimeji))
             .unwrap();
