@@ -12,7 +12,6 @@ use std::{
 };
 use winit::{
     dpi::{LogicalSize, PhysicalPosition},
-    raw_window_handle::HasWindowHandle,
     window::Window,
 };
 
@@ -21,16 +20,16 @@ use BucketThreadMessage::*;
 /// All associated functions run on the inner thread.
 ///
 /// ShimejiWindow is only used in the worker function passed to the spawned thread.
-struct ShimejiWindow<'a> {
+struct ShimejiWindow<'pix> {
     window: Arc<Window>,
-    pixels: Pixels<'a>,
+    pixels: Box<Pixels<'pix>>,
     data: Arc<ShimejiData>,
     last_rendered_frame: Instant,
     current_frame: Option<NonZeroU32>,
 }
 
-impl<'a> ShimejiWindow<'a> {
-    pub fn new(arc_window: Arc<Window>, mut pixels: Pixels<'a>, data: Arc<ShimejiData>) -> Self {
+impl<'pix> ShimejiWindow<'pix> {
+    pub fn new(arc_window: Arc<Window>, mut pixels: Pixels<'pix>, data: Arc<ShimejiData>) -> Self {
         let shimeji_width = data.width;
         let shimeji_height = data.height;
         let _ = arc_window.request_inner_size(LogicalSize::new(shimeji_width, shimeji_height));
@@ -41,7 +40,7 @@ impl<'a> ShimejiWindow<'a> {
             window: arc_window,
             last_rendered_frame: Instant::now(),
             data,
-            pixels,
+            pixels: Box::new(pixels),
             current_frame: None,
         }
     }
@@ -104,11 +103,25 @@ impl ShimejiWindow<'_> {
     }
 }
 
+/// Signify that an error has happened on thread `num`.
+macro_rules! thread_error {
+    ($num:expr, $($x:expr),+) => {
+        ::log::error!("THREAD {}: {}", $num, format_args!($($x),+))
+    };
+}
+
+macro_rules! thread_debug {
+    ($num:expr, $($x:expr),+) => {
+        ::log::debug!("THREAD {}: {}", $num, format_args!($($x),+))
+    };
+}
+
 /// The thread is started, we are executing.
 #[inline]
 pub fn loop_for_shimeji_execution(
     receiver: Receiver<BucketThreadMessage>,
     should_exit: Arc<AtomicBool>,
+    thread_id: usize,
 ) -> () {
     'running: while !should_exit.load(Ordering::Relaxed) {
         let mut inner_vec = vec![];
@@ -116,21 +129,21 @@ pub fn loop_for_shimeji_execution(
         let recv = match recv {
             Ok(val) => val,
             Err(_) => {
-                log::debug!("Sender hung up without sending any shimeji");
+                thread_debug!(thread_id, "Sender hung up without sending any shimeji");
                 break 'running;
             }
         };
         match recv {
             Add(window, pixels, data) => {
-                log::debug!("Received initial window: {0:?}", &window,);
+                thread_debug!(thread_id, "Received initial window: {0:?}", &window);
                 let monitor = window.current_monitor();
                 match monitor {
                     Some(monitor) => {
                         // log::debug!("monitor: {monitor:?}");
                         let size = monitor.size();
                         let position = window.outer_position().unwrap();
-                        log::debug!("monitor size: {size:?}");
-                        log::debug!("window position: {position:?}");
+                        thread_debug!(thread_id, "monitor size: {size:?}");
+                        thread_debug!(thread_id, "window position: {position:?}");
                         window.set_outer_position(PhysicalPosition::new(
                             0, // size.height - window.inner_size().height,
                             500,
@@ -154,23 +167,40 @@ pub fn loop_for_shimeji_execution(
             // add a new shimeji, if we're waiting to receive one
             let val = match receiver.try_recv() {
                 Err(mpsc::TryRecvError::Empty) => None,
-                Err(_) => break,
+                Err(what) => {
+                    thread_error!(thread_id, "Unrecognized try_recv error: {what:?}");
+                    break;
+                }
                 Ok(val) => Some(val),
             };
 
             if let Some(val) = val {
                 match val {
                     Add(window, pixels, data) => {
-                        log::debug!("Received window: {0:?}", &window);
+                        thread_debug!(thread_id, "Received window: {0:?}", &window);
                         inner_vec.push(ShimejiWindow::new(window, pixels, data))
                     }
                     Remove(..) => todo!(),
                     Resized { id, size } => {
-                        let shimeji = inner_vec
+                        let res = inner_vec
                             .iter_mut()
-                            .find(|shimeji| (**shimeji).window.id() == id)
-                            .expect("resized ID should be valid");
-                        let _ = shimeji.pixels.resize_surface(size.width, size.height);
+                            .find(|shimeji| (**shimeji).window.id() == id);
+                        if let Some(shimeji) = res {
+                            match shimeji.pixels.resize_surface(size.width, size.height) {
+                                Ok(_) => (),
+                                Err(why) => {
+                                    thread_error!(
+                                        thread_id,
+                                        "Error resizing inner window id {id:?}: {why}"
+                                    );
+                                }
+                            };
+                        } else {
+                            thread_error!(
+                                thread_id,
+                                "Could not find a shimeji that corresponds to id {id:?}"
+                            );
+                        }
                     }
                 }
             }

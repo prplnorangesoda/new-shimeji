@@ -87,10 +87,11 @@ impl ShimejiBucket {
         let should_exit = self.should_exit.clone();
         log::trace!("Initting bucket id: {}", &self.id);
         let (sender, receiver) = mpsc::channel();
+        let id = self.id.clone();
         let thread = thread::Builder::new()
             .name(format!("Bucket {} thread", &self.id))
             .spawn(move || {
-                crate::shimeji::loop_for_shimeji_execution(receiver, should_exit);
+                crate::shimeji::loop_for_shimeji_execution(receiver, should_exit, id);
             })?;
         self.sender = Some(sender.clone());
         self.thread = Some(thread);
