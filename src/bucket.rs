@@ -106,7 +106,7 @@ impl ShimejiBucket {
         drop(self.sender.take());
         match self.thread.take().unwrap().join() {
             Ok(_) => log::debug!("Thread joined successfully on id {}", self.id),
-            Err(huh) => log::error!("THREAD JOIN ERROR on id {}: {huh:?}", self.id),
+            Err(why) => log::error!("THREAD JOIN ERROR on id {}: {why:?}", self.id),
         };
         self.is_running = false;
         Ok(())

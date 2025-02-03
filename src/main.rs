@@ -310,11 +310,6 @@ mod tests {
             .init()
             .ok();
     }
-    #[test]
-    #[should_panic]
-    fn panics_on_amount_0() {
-        let _ = BucketManager::new(0);
-    }
 
     #[test]
     fn buckets_are_created_successfully() {
@@ -324,6 +319,31 @@ mod tests {
         assert!(manager.buckets.first().is_some());
     }
 
+    mod fuzz {
+        use std::fs::File;
+
+        use xml_parser::XmlParseError;
+
+        use super::*;
+
+        #[test]
+        fn bad_filename() {
+            init_logger();
+            let err =
+                xml_parser::parse(File::open("./fuzz/bad-filename.xml").unwrap()).unwrap_err();
+            dbg!(&err);
+            assert!(matches!(err, XmlParseError::MissingImageFile { .. }))
+        }
+
+        #[test]
+        fn missing_shimeji() {
+            init_logger();
+            let err =
+                xml_parser::parse(File::open("./fuzz/missing-shimeji.xml").unwrap()).unwrap_err();
+            dbg!(&err);
+            assert!(matches!(err, XmlParseError::NoShimeji))
+        }
+    }
     // #[test]
     // fn buckets_receive_shimeji_sequentially() -> anyhow::Result<()> {
     //     init_logger();

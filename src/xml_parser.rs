@@ -33,7 +33,7 @@ pub struct XmlReturnData {
     pub shimeji_height: u32,
     pub shimeji_width: u32,
 }
-pub fn parse<T: Read>(data: T) -> Result<Box<XmlReturnData>, XmlParseError> {
+pub fn parse(data: impl Read) -> Result<Box<XmlReturnData>, XmlParseError> {
     let xml_reader = xml::EventReader::new(data);
 
     let mut shimeji_found = false;

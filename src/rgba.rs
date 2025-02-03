@@ -10,11 +10,24 @@ pub struct Rgba {
 
 impl Debug for Rgba {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "(r: {:3}, g: {:3}, b: {:3}, a: {:3})",
-            self.red, self.green, self.blue, self.alpha
-        )
+        if f.alternate() {
+            write!(
+                f,
+                "(
+                    r: {:3}, 
+                    g: {:3},
+                    b: {:3}
+                    a: {:3} 
+                )",
+                self.red, self.green, self.blue, self.alpha
+            )
+        } else {
+            write!(
+                f,
+                "(r: {:3}, g: {:3}, b: {:3}, a: {:3})",
+                self.red, self.green, self.blue, self.alpha
+            )
+        }
     }
 }
 impl Rgba {
